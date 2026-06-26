@@ -1,0 +1,18 @@
+# Virtual environment
+.venv/
+
+# Build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+*.pyo
+
+# Backups
+backups/
+
+# Secrets
+secrets.env
+
+# System
+.DS_Store
+Thumbs.db

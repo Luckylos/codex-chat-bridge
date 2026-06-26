@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+import json
+
+from .bridge_context import BridgeToolContext
+from .stream_responses_state import ResponsesStreamState
+
+
+def _extract_block(buffer: str) -> tuple[str, str] | None:
+    marker = "\n\n"
+    idx = buffer.find(marker)
+    if idx == -1:
+        return None
+    return buffer[:idx], buffer[idx + len(marker):]
+
+
+def _parse_sse_block(block: str) -> tuple[str | None, str | None]:
+    event_name: str | None = None
+    data_parts: list[str] = []
+    for line in block.splitlines():
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_parts.append(line.split(":", 1)[1].lstrip())
+    data = "\n".join(data_parts) if data_parts else None
+    return event_name, data
+
+
+def _extract_reasoning_delta(delta: dict) -> str:
+    for key in ("reasoning_content", "reasoning"):
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return ""
+
+
+async def create_responses_sse_stream_from_chat_stream(
+    upstream_stream: AsyncIterator[bytes],
+    tool_context: BridgeToolContext | None = None,
+) -> AsyncIterator[bytes]:
+    buffer = ""
+    state = ResponsesStreamState(tool_context)
+    try:
+        async for chunk in upstream_stream:
+            buffer += chunk.decode("utf-8", errors="ignore")
+            while True:
+                extracted = _extract_block(buffer)
+                if extracted is None:
+                    break
+                block, buffer = extracted
+                if not block.strip():
+                    continue
+                event_name, data = _parse_sse_block(block)
+                if not data:
+                    continue
+                if data.strip() == "[DONE]":
+                    for event in state.finalize():
+                        yield event
+                    continue
+                payload = json.loads(data)
+                if event_name == "error" or payload.get("error"):
+                    err = payload.get("error") or payload
+                    message = err.get("message") if isinstance(err, dict) else str(err)
+                    error_type = err.get("type", "stream_error") if isinstance(err, dict) else "stream_error"
+                    yield state.fail(message or "upstream stream error", error_type)
+                    return
+
+                state.apply_chunk_metadata(payload)
+                for event in state.ensure_started():
+                    yield event
+
+                choice = (payload.get("choices") or [{}])[0]
+                delta = choice.get("delta") or {}
+
+                reasoning_delta = _extract_reasoning_delta(delta)
+                if reasoning_delta:
+                    for event in state.push_reasoning_delta(reasoning_delta):
+                        yield event
+
+                tool_calls = delta.get("tool_calls")
+                if isinstance(tool_calls, list) and tool_calls:
+                    reasoning_text = state.active_reasoning_text_for_tools()
+                    if reasoning_text:
+                        for event in state.finalize_reasoning_if_open():
+                            yield event
+                    for tool_call in tool_calls:
+                        if isinstance(tool_call, dict):
+                            for event in state.push_tool_call_delta(tool_call, reasoning_text or None):
+                                yield event
+
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    for event in state.finalize_reasoning_if_open():
+                        yield event
+                    for event in state.push_text_delta(content):
+                        yield event
+                elif isinstance(content, list):
+                    for event in state.finalize_reasoning_if_open():
+                        yield event
+                    for part in content:
+                        if not isinstance(part, dict):
+                            continue
+                        part_type = part.get("type")
+                        if part_type in {"text", "output_text"} and isinstance(part.get("text"), str) and part.get("text"):
+                            for event in state.push_text_delta(part["text"]):
+                                yield event
+                        elif part_type == "refusal" and isinstance(part.get("refusal"), str) and part.get("refusal"):
+                            for event in state.push_refusal_part(part["refusal"]):
+                                yield event
+
+                refusal = delta.get("refusal")
+                if isinstance(refusal, str) and refusal:
+                    for event in state.finalize_reasoning_if_open():
+                        yield event
+                    for event in state.push_refusal_part(refusal):
+                        yield event
+
+                finish_reason = choice.get("finish_reason")
+                if isinstance(finish_reason, str) and finish_reason:
+                    state.set_finish_reason(finish_reason)
+
+        for event in state.finalize():
+            yield event
+    except Exception as exc:
+        yield state.fail(f"Stream error: {exc}")
