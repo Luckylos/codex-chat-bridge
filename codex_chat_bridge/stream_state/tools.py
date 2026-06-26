@@ -40,7 +40,7 @@ class ToolStateStore:
         return [output_item_added(state.output_index, item)], kind
 
     def push_delta(self, envelope: ResponseEnvelopeState, tool_call: dict, reasoning: str | None) -> list[bytes]:
-        index = int(tool_call.get("index", 0) or 0)
+        index = int(tool_call.get("index", 0))
         state = self.tool_calls.setdefault(index, ToolCallState())
         if tool_call.get("id"):
             state.call_id = str(tool_call["id"])
@@ -79,5 +79,5 @@ class ToolStateStore:
             else:
                 events.append(function_arguments_done(state.item_id, state.output_index, arguments))
             events.append(output_item_done(state.output_index, item))
-            envelope.append_completed_item(state.output_index or 0, item)
+            envelope.append_completed_item(state.output_index, item)
         return events

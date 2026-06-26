@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+import logging
 from typing import Any
 
 import httpx
 
 from .config import Settings
+
+_logger = logging.getLogger("codex-chat-bridge.upstream")
 
 
 class UpstreamClient:
@@ -118,8 +121,15 @@ class UpstreamClient:
                 error_text = response.text
                 retried = self._retry_body(body, error_text)
                 if retried is not None:
+                    _logger.info(
+                        "upstream 400 retry: mode=%s body_keys=%s",
+                        [p[0].__name__ for p in self._RETRY_RULES if p[0](self, body, error_text)],
+                        list(retried.keys()),
+                    )
                     async with httpx.AsyncClient(timeout=timeout) as client:
                         response = await client.post(url, headers=headers, json=retried)
+                else:
+                    _logger.warning("upstream 400 with no compatible retry: %.200s", error_text)
             response.raise_for_status()
             return response.json()
 
