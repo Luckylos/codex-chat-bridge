@@ -1,4 +1,4 @@
-from .envelope import ResponseEnvelopeState, sse_event
+from .envelope import ResponseEnvelopeState
 from .message import MessageState
 from .reasoning import ReasoningState
 from .tools import ToolStateStore
@@ -8,5 +8,4 @@ __all__ = [
     "ReasoningState",
     "ResponseEnvelopeState",
     "ToolStateStore",
-    "sse_event",
 ]

@@ -10,7 +10,7 @@ class ReasoningState:
         self.text = ""
         self.item_added = False
         self.done = False
-        self.output_index: int | None = None
+        self.output_index: int = 0
 
     def push_delta(self, envelope: ResponseEnvelopeState, delta: str) -> list[bytes]:
         events: list[bytes] = []
@@ -68,7 +68,7 @@ class ReasoningState:
             "type": "reasoning",
             "summary": [{"type": "summary_text", "text": self.text}],
         }
-        envelope.append_completed_item(self.output_index or 0, item)
+        envelope.append_completed_item(self.output_index, item)
         return [
             sse_event(
                 "response.reasoning_summary_text.done",

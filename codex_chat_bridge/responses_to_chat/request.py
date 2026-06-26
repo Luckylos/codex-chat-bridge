@@ -186,8 +186,13 @@ def _response_format_from_payload(payload: ResponsesRequest) -> Any:
     return payload.response_format
 
 
-def responses_to_chat_request(payload: ResponsesRequest, default_model: str, tool_context: BridgeToolContext | None = None) -> ChatCompletionsRequest:
-    messages: list[ChatMessage] = []
+def responses_to_chat_request(
+    payload: ResponsesRequest,
+    default_model: str,
+    tool_context: BridgeToolContext | None = None,
+    existing_messages: list[ChatMessage] | None = None,
+) -> ChatCompletionsRequest:
+    messages: list[ChatMessage] = list(existing_messages) if existing_messages else []
 
     if payload.instructions:
         instructions = instruction_text(payload.instructions).strip()

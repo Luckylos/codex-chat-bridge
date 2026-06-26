@@ -7,10 +7,10 @@ from ..sse_utils import sse_event
 
 
 class ResponseEnvelopeState:
-    def __init__(self) -> None:
+    def __init__(self, response_id: str | None = None) -> None:
         self.response_started = False
         self.completed = False
-        self.response_id = "resp_bridge"
+        self.response_id = response_id or "resp_bridge"
         self.model = ""
         self.created_at = int(time.time())
         self.usage: dict | None = None

@@ -209,3 +209,33 @@ Responses client -> bridge -> Chat Completions upstream
 - 直接照搬上游项目（cc-switch）的函数不现实，需要做语言级重写/翻译
 - 若只做“最小文本路径”，后续还需补 tool/reasoning/streaming
 - `/v1/models` 在桥上应稳定暴露，避免再遇到网关注册问题
+
+## 协议能力矩阵
+
+以下矩阵区分「桥自身是否实现」和「上游 Provider 是否支持」，避免将 Provider 的能力限制误判为桥的缺陷。
+
+| Responses Feature | Bridge | Provider-Dependent | 备注 |
+|:--|:--:|:--:|:--|
+| Text（input_text / output_text） | ✅ | — | 核心协议，双向完整 |
+| Streaming SSE 事件 | ✅ | — | 15 种事件全覆盖（见备注 1） |
+| input_image → image_url | ✅ | ✅ 上游需支持 image content part | 含 SSRF 安全校验 |
+| Function Call（单/并行多 Tool） | ✅ | ✅ 上游需支持 tool_calls | 含 function/custom/tool_search 三种 kind |
+| Namespace Tool | ✅ | — | flatten→restore 完整 roundtrip |
+| Reasoning 全程保留（input→SSE→roundtrip） | ✅ | ✅ 上游需返回 reasoning_content | 流式/非流式均支持 |
+| refusals | ✅ | — | 非流式 + content array 两种路径 |
+| input_file / input_audio | ❌ | ✅ 上游需对应 content part | 桥无该映射逻辑 |
+| computer_call / computer_call_output | ❌ | ✅ 上游需对应 tool type | 桥无该映射逻辑 |
+| previous_response_id | ✅ | — | 内存存储，TTL 1h 惰性清理，messages + tool_context + model 持久化 |
+| Hosted Tools（web_search / code_interpreter 等） | ⬜ | ✅ 上游必须原生支持 | 桥拒绝转换此类 built-in tool |
+| MCP Tool | ⬜ | — | 经 custom tool 通道透传，无 MCP 协议适配 |
+| usage / incomplete_details | ✅ | — | 双向映射 |
+| text.format → response_format | ✅ | ✅ 上游需支持 response_format | json_object / json_schema 均已验证 |
+| metadata | ⬜ | — | 透传字段，无桥层语义 |
+
+**备注 1：SSE 事件清单**
+
+response.created / response.in_progress / response.output_item.added / response.output_item.done / response.output_text.delta / response.output_text.done / response.content_part.added / response.content_part.done / response.reasoning_summary_text.delta / response.reasoning_summary_text.done / response.reasoning_summary_part.added / response.reasoning_summary_part.done / response.function_call_arguments.delta / response.function_call_arguments.done / response.completed / response.failed
+
+**备注 2：previous_response_id**（已实现）
+
+当前使用进程内 SessionStore（dict + TTL），每次响应完成后保存 messages、tool_context、model。后续请求携带 `previous_response_id` 时，从 store 恢复上下文并将新 input items 追加到已有消息列表后。单进程足够，如需多进程/持久化替换 SessionStore 后端即可。

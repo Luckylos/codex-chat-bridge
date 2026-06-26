@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from .bridge_context import BridgeToolContext
+from .models import ChatMessage
 from .sse_utils import extract_block, parse_sse_block
 from .stream_responses_state import ResponsesStreamState
 
@@ -20,9 +21,16 @@ def _extract_reasoning_delta(delta: dict) -> str:
 async def create_responses_sse_stream_from_chat_stream(
     upstream_stream: AsyncIterator[bytes],
     tool_context: BridgeToolContext | None = None,
+    response_id: str | None = None,
+    _captured_state: list | None = None,
 ) -> AsyncIterator[bytes]:
+    """Wrap a Chat Completions SSE stream into Responses SSE events.
+
+    If _captured_state is provided (e.g. []), the state is appended
+    after iteration so caller can extract assistant_message for session.
+    """
     buffer = ""
-    state = ResponsesStreamState(tool_context)
+    state = ResponsesStreamState(tool_context, response_id=response_id)
     try:
         async for chunk in upstream_stream:
             buffer += chunk.decode("utf-8", errors="ignore")
@@ -48,6 +56,9 @@ async def create_responses_sse_stream_from_chat_stream(
             yield event
     except Exception as exc:
         yield state.fail(f"Stream error: {exc}")
+    finally:
+        if _captured_state is not None:
+            _captured_state.append(state)
 
 
 def _process_chat_chunk(
@@ -129,10 +140,10 @@ def _chat_message_to_fake_delta(chat_choice: dict) -> dict:
 async def create_responses_sse_from_chat_response(
     chat_body: dict,
     tool_context: BridgeToolContext | None = None,
+    response_id: str | None = None,
 ) -> AsyncIterator[bytes]:
-    """Wrap a non-streaming Chat Completions response into Responses SSE events.
-    This allows the client to always see SSE, even when the upstream is non-streaming."""
-    state = ResponsesStreamState(tool_context)
+    """Wrap a non-streaming Chat Completions response into Responses SSE events."""
+    state = ResponsesStreamState(tool_context, response_id=response_id)
     state.apply_chunk_metadata(chat_body)
 
     choices = chat_body.get("choices") or []

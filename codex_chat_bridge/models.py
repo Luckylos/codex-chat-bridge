@@ -17,6 +17,7 @@ class ResponsesMessage(BaseModel):
 
 class ResponsesRequest(BaseModel):
     model: str | None = None
+    previous_response_id: str | None = None
     input: Any | None = None
     instructions: Any | None = None
     stream: bool = False

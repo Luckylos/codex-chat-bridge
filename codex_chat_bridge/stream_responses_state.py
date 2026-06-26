@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from .bridge_context import BridgeToolContext
-from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore, sse_event
+from .sse_utils import sse_event
+from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore
 
 
 class ResponsesStreamState:
-    def __init__(self, tool_context: BridgeToolContext | None = None) -> None:
+    def __init__(self, tool_context: BridgeToolContext | None = None, response_id: str | None = None) -> None:
         resolved_context = tool_context or BridgeToolContext()
-        self.envelope = ResponseEnvelopeState()
+        self.envelope = ResponseEnvelopeState(response_id=response_id)
         self.reasoning = ReasoningState()
         self.message = MessageState()
         self.tools = ToolStateStore(resolved_context)
@@ -69,3 +70,37 @@ class ResponsesStreamState:
         response = self.envelope.base_response("failed", self.envelope.completed_output_items())
         response["error"] = {"message": message, "type": error_type}
         return sse_event("response.failed", {"type": "response.failed", "response": response})
+
+    def build_assistant_message(self) -> ChatMessage | None:
+        """从流状态构建 assistant ChatMessage，用于 session 持久化。"""
+        from .models import ChatMessage
+
+        content: str | None = self.message.text or None
+        tool_call_states = {k: v for k, v in self.tools.tool_calls.items() if v.name}
+
+        if not content and not tool_call_states:
+            if self.reasoning.text:
+                content = ""
+            else:
+                return None
+
+        chat_tool_calls = None
+        if tool_call_states:
+            chat_tool_calls = []
+            for index, state in sorted(tool_call_states.items(), key=lambda pair: pair[0]):
+                chat_tool_calls.append({
+                    "id": state.call_id or f"call_{index}",
+                    "type": "function",
+                    "function": {
+                        "name": state.name,
+                        "arguments": state.arguments,
+                    },
+                })
+
+        reasoning = self.reasoning.text.strip() or None
+        return ChatMessage(
+            role="assistant",
+            content=content,
+            tool_calls=chat_tool_calls,
+            reasoning_content=reasoning,
+        )
