@@ -165,6 +165,7 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             continue
 
         flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
+        pending_reasoning = None
 
     flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
     backfill_tool_call_reasoning_content(messages)

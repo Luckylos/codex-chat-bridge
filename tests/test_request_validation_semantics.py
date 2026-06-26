@@ -202,3 +202,59 @@ class RequestValidationSemanticsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PreviousResponseIdIntegrationTests(unittest.TestCase):
+    """Non-streaming previous_response_id roundtrip via HTTP API."""
+
+    def test_previous_response_id_roundtrip(self) -> None:
+        class FakeUpstream:
+            def __init__(self, settings) -> None:
+                self.call_count = 0
+
+            async def create_chat_completion(self, payload):
+                self.call_count += 1
+                return {
+                    "id": f"chatcmpl_{self.call_count}",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "test-model",
+                    "choices": [{
+                        "message": {"role": "assistant", "content": f"Response {self.call_count}"},
+                        "finish_reason": "stop",
+                    }],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+                }
+
+            async def list_models(self):
+                return []
+
+        client = TestClient(app)
+        fake = FakeUpstream(None)
+        fake.settings = None
+
+        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.routes.UpstreamClient", return_value=fake,
+        ):
+            # Request A
+            resp_a = client.post("/v1/responses", json={
+                "model": "test-model",
+                "input": "First message",
+            })
+            self.assertEqual(resp_a.status_code, 200)
+            body_a = resp_a.json()
+            rid = body_a["id"]
+            self.assertTrue(rid.startswith("resp_bridge_"), f"Expected bridge id, got {rid}")
+            self.assertEqual(fake.call_count, 1)
+
+            # Request B with previous_response_id
+            resp_b = client.post("/v1/responses", json={
+                "model": "test-model",
+                "previous_response_id": rid,
+                "input": "Second message",
+            })
+            self.assertEqual(resp_b.status_code, 200)
+            body_b = resp_b.json()
+
+            # Session was saved: upstream received context + new input
+            self.assertEqual(fake.call_count, 2)

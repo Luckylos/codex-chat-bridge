@@ -23,6 +23,7 @@ class ToolStateStore:
     def __init__(self, tool_context: BridgeToolContext) -> None:
         self.tool_context = tool_context
         self.tool_calls: dict[int, ToolCallState] = {}
+        self.finalized = False
 
     def _ensure_added(
         self,
@@ -40,6 +41,8 @@ class ToolStateStore:
         return [output_item_added(state.output_index, item)], kind
 
     def push_delta(self, envelope: ResponseEnvelopeState, tool_call: dict, reasoning: str | None) -> list[bytes]:
+        if self.finalized:
+            return []
         index = int(tool_call.get("index", 0))
         state = self.tool_calls.setdefault(index, ToolCallState())
         if tool_call.get("id"):
@@ -62,6 +65,9 @@ class ToolStateStore:
         return events
 
     def finalize(self, envelope: ResponseEnvelopeState) -> list[bytes]:
+        if self.finalized:
+            return []
+        self.finalized = True
         events: list[bytes] = []
         for index, state in sorted(self.tool_calls.items(), key=lambda pair: pair[0]):
             if state.done:

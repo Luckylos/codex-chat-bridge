@@ -13,6 +13,8 @@ class ReasoningState:
         self.output_index: int = 0
 
     def push_delta(self, envelope: ResponseEnvelopeState, delta: str) -> list[bytes]:
+        if self.done:
+            return []
         events: list[bytes] = []
         if not self.item_added:
             self.item_added = True

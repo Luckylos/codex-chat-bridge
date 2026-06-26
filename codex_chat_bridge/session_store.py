@@ -37,8 +37,9 @@ _DEFAULT_TTL = 3600  # 1 hour
 class SessionStore:
     """In-memory 会话存储，按 response_id 索引。"""
 
-    def __init__(self, ttl: int = _DEFAULT_TTL) -> None:
+    def __init__(self, ttl: int = _DEFAULT_TTL, max_sessions: int = 500) -> None:
         self._ttl = ttl
+        self._max_sessions = max_sessions
         self._sessions: dict[str, SessionRecord] = {}
 
     # ------------------------------------------------------------------
@@ -59,6 +60,7 @@ class SessionStore:
         """保存会话状态，同时触发惰性清理。"""
         record.created_at = time.time()
         self._sessions[response_id] = record
+        self._enforce_cap()
         self._cleanup()
 
     def _cleanup(self) -> None:
@@ -67,6 +69,12 @@ class SessionStore:
         stale = [rid for rid, rec in self._sessions.items() if now - rec.created_at > self._ttl]
         for rid in stale:
             del self._sessions[rid]
+
+    def _enforce_cap(self) -> None:
+        """超出上限时淘汰最旧条目（非过期）。"""
+        while len(self._sessions) > self._max_sessions:
+            oldest = min(self._sessions.items(), key=lambda kv: kv[1].created_at)[0]
+            del self._sessions[oldest]
 
     @property
     def active_count(self) -> int:

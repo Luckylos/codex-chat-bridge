@@ -56,6 +56,8 @@ class MessageState:
         return events
 
     def push_text_delta(self, envelope: ResponseEnvelopeState, delta: str) -> list[bytes]:
+        if self.item_done:
+            return []
         events = self._ensure_text_part_started(envelope)
         self.text += delta
         events.append(
@@ -73,7 +75,7 @@ class MessageState:
         return events
 
     def push_refusal_part(self, envelope: ResponseEnvelopeState, refusal: str) -> list[bytes]:
-        if not refusal:
+        if not refusal or self.item_done:
             return []
         events = self._ensure_message_item_started(envelope)
         content_index = len(self.parts)
