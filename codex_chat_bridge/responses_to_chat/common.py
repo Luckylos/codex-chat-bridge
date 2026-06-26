@@ -37,27 +37,6 @@ BUILT_IN_RESPONSES_TOOLS = {
     "mcp",
 }
 
-# 仅允许 https:// 和 data:image/ 两种 image URL scheme
-# 拒绝 file://, http://(SSRF 风险), ftp:// 等
-_ALLOWED_IMAGE_SCHEMES = ("https://", "data:image/")
-
-
-def is_safe_image_url(url: str | None) -> bool:
-    """检查 image URL 是否安全，防止 SSRF 和内网泄露。
-
-    允许 scheme:
-      - https://        — 标准外链
-      - data:image/     — inline base64 图片
-
-    拒绝:
-      - file://         — 本地文件读取
-      - http://         — 内网/云元数据攻击向量
-      - ftp:// 等
-    """
-    if not isinstance(url, str) or not url:
-        return False
-    return url.startswith(_ALLOWED_IMAGE_SCHEMES)
-
 
 def _sanitize_chat_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     """三段式消息归一化流水线。
@@ -178,6 +157,28 @@ def flatten_text_content(content: Any) -> str:
             elif isinstance(item, str):
                 chunks.append(item)
     return "\n".join(chunk for chunk in chunks if chunk)
+
+
+# 仅允许 https:// 和 data:image/ 两种 image URL scheme
+# 拒绝 file://, http://(SSRF 风险), ftp:// 等
+_ALLOWED_IMAGE_SCHEMES = ("https://", "data:image/")
+
+
+def is_safe_image_url(url: str | None) -> bool:
+    """检查 image URL 是否安全，防止 SSRF 和内网泄露。
+
+    允许 scheme:
+      - https://        — 标准外链
+      - data:image/     — inline base64 图片
+
+    拒绝:
+      - file://         — 本地文件读取
+      - http://         — 内网/云元数据攻击向量
+      - ftp:// 等
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    return url.startswith(_ALLOWED_IMAGE_SCHEMES)
 
 
 def chat_image_part_from_input_item(item: dict[str, Any]) -> dict[str, Any]:
