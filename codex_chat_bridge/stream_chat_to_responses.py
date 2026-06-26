@@ -122,15 +122,22 @@ def _process_chat_chunk(
 
 def _chat_message_to_fake_delta(chat_choice: dict) -> dict:
     """Convert a non-streaming Chat Completions choice into a fake streaming delta
-    so _process_chat_chunk can produce the same SSE events."""
+    so _process_chat_chunk can produce the same SSE events.
+
+    Critical: injects 'index' into each tool_call because the streaming delta
+    protocol uses 'index' to distinguish parallel tool calls, but the non-streaming
+    message format omits it. Without this, all parallel tool_calls collapse to index 0.
+    """
     message = chat_choice.get("message") or {}
     delta: dict = {
         "content": message.get("content") or "",
         "role": "assistant",
     }
     tool_calls = message.get("tool_calls")
-    if tool_calls:
-        delta["tool_calls"] = tool_calls
+    if isinstance(tool_calls, list):
+        delta["tool_calls"] = [
+            {**tc, "index": i} for i, tc in enumerate(tool_calls)
+        ]
     reasoning = message.get("reasoning_content") or message.get("reasoning")
     if reasoning:
         delta["reasoning_content"] = reasoning
