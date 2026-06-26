@@ -38,64 +38,98 @@ def _reasoning_enabled(payload: ResponsesRequest) -> bool | None:
     return effort != "none"
 
 
-def _apply_reasoning_options(payload: ResponsesRequest, request: ChatCompletionsRequest) -> None:
-    reasoning_mode = get_settings().reasoning_mode
-    effort = _reasoning_effort(payload)
-    enabled = _reasoning_enabled(payload)
+# ---- reasoning mode handlers (called via dispatch table) ----
 
-    if reasoning_mode == ReasoningMode.NONE:
-        # 完全禁用推理参数，不发送任何 reasoning/thinking 字段
-        return
 
-    if reasoning_mode == ReasoningMode.PASSTHROUGH:
-        # 原样透传 reasoning 字段，不做任何映射
-        if payload.reasoning is not None:
-            request.thinking = payload.reasoning
-        return
+def _noop_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """完全禁用推理参数，不发送任何 reasoning/thinking 字段。"""
+    return
 
-    if reasoning_mode == ReasoningMode.THINKING:
-        # DeepSeek: thinking.type + reasoning_effort
-        if enabled is True:
-            request.thinking = {"type": "enabled"}
-        elif enabled is False:
-            request.thinking = {"type": "disabled"}
-        if effort and effort != "none":
-            request.reasoning_effort = effort
-        return
 
-    if reasoning_mode == ReasoningMode.THINKING_ONLY:
-        # GLM/Kimi/MiMo: 仅 thinking.type，不含 reasoning_effort
-        if enabled is True:
-            request.thinking = {"type": "enabled"}
-        elif enabled is False:
-            request.thinking = {"type": "disabled"}
-        return
+def _passthrough_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """原样透传 reasoning 字段到 upstream。"""
+    if payload.reasoning is not None:
+        request.thinking = payload.reasoning
 
-    if reasoning_mode == ReasoningMode.ENABLE_THINKING:
-        # SiliconFlow/Qwen: enable_thinking=true/false
-        if enabled is True:
-            request.thinking = {"type": "enabled"}
-        return
 
-    if reasoning_mode == ReasoningMode.SPLIT:
-        # MiniMax: reasoning_split=true
-        if enabled is True:
-            request.thinking = {"type": "enabled"}
-        return
+def _thinking_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """DeepSeek: thinking.type + reasoning_effort"""
+    if enabled is True:
+        request.thinking = {"type": "enabled"}
+    elif enabled is False:
+        request.thinking = {"type": "disabled"}
+    if effort and effort != "none":
+        request.reasoning_effort = effort
 
-    if reasoning_mode == ReasoningMode.EFFORT_OBJ:
-        # OpenRouter: reasoning={effort: ...}
-        if effort and effort != "none":
-            request.thinking = {"type": "enabled"}
-            request.reasoning_effort = effort
-        return
 
-    # 默认（reasoning_mode == EFFORT）— OpenAI 标准
+def _thinking_only_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """GLM/Kimi/MiMo: 仅 thinking.type，不含 reasoning_effort"""
+    if enabled is True:
+        request.thinking = {"type": "enabled"}
+    elif enabled is False:
+        request.thinking = {"type": "disabled"}
+
+
+def _enable_thinking_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """SiliconFlow/Qwen: enable_thinking=true"""
+    if enabled is True:
+        request.thinking = {"type": "enabled"}
+
+
+def _split_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """MiniMax: reasoning_split=true"""
+    if enabled is True:
+        request.thinking = {"type": "enabled"}
+
+
+def _effort_obj_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """OpenRouter: reasoning={effort: ...}"""
+    if effort and effort != "none":
+        request.thinking = {"type": "enabled"}
+        request.reasoning_effort = effort
+
+
+def _effort_reasoning(
+    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
+) -> None:
+    """OpenAI 标准: reasoning.effort -> reasoning_effort"""
     if enabled is None:
         return
     request.thinking = {"type": "enabled" if enabled else "disabled"}
     if effort and effort != "none":
         request.reasoning_effort = effort
+
+
+def _apply_reasoning_options(payload: ResponsesRequest, request: ChatCompletionsRequest) -> None:
+    reasoning_mode = get_settings().reasoning_mode
+    effort = _reasoning_effort(payload)
+    enabled = _reasoning_enabled(payload)
+
+    _dispatcher = {
+        ReasoningMode.NONE: _noop_reasoning,
+        ReasoningMode.PASSTHROUGH: _passthrough_reasoning,
+        ReasoningMode.THINKING: _thinking_reasoning,
+        ReasoningMode.THINKING_ONLY: _thinking_only_reasoning,
+        ReasoningMode.ENABLE_THINKING: _enable_thinking_reasoning,
+        ReasoningMode.SPLIT: _split_reasoning,
+        ReasoningMode.EFFORT_OBJ: _effort_obj_reasoning,
+    }
+    handler = _dispatcher.get(reasoning_mode, _effort_reasoning)
+    handler(payload, request, effort, enabled)
 
 
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any] | None:

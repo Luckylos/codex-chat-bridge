@@ -111,8 +111,6 @@ def _messages_are_mergeable(a: ChatMessage, b: ChatMessage) -> bool:
 def _merge_messages(a: ChatMessage, b: ChatMessage) -> ChatMessage:
     """合并两条相邻同 role 消息"""
     merged_content = _merge_content(a.content, b.content)
-    if a.role == "tool":
-        return ChatMessage(role="tool", content=merged_content)
     return ChatMessage(role=a.role, content=merged_content)
 
 
@@ -186,21 +184,20 @@ def chat_image_part_from_input_item(item: dict[str, Any]) -> dict[str, Any]:
     image_value = item.get("image_url")
     if isinstance(image_value, str) and image_value:
         url = image_value
+        payload: dict[str, Any] = {"url": url}
     elif isinstance(image_value, dict) and isinstance(image_value.get("url"), str) and image_value.get("url"):
         url = image_value["url"]
         payload = dict(image_value)
     else:
-        raise UnsupportedResponsesInputItemError(item.get("type") if isinstance(item.get("type"), str) else None, item)
+        raise UnsupportedResponsesInputItemError(
+            item.get("type") if isinstance(item.get("type"), str) else None, item,
+        )
     if not is_safe_image_url(url):
         raise UnsupportedResponsesInputItemError(
             item.get("type") if isinstance(item.get("type"), str) else None,
             item,
             detail=f"Rejected unsafe image URL scheme (only https:// and data:image/ allowed): {url[:60]}",
         )
-    if isinstance(image_value, dict):
-        payload = dict(image_value)
-    else:
-        payload: dict[str, Any] = {"url": url}
     detail = item.get("detail")
     if isinstance(detail, str) and detail and "detail" not in payload:
         payload["detail"] = detail

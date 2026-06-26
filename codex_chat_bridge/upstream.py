@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-import json
 from typing import Any
 
 import httpx
@@ -46,36 +45,66 @@ class UpstreamClient:
         return headers
 
     # ------------------------------------------------------------------
-    # 400 compatible retry — upstream 返回 400 时尝试兼容重试
+    # 400 compatible retry
+    # upstream 返回 400 时按规则逐条尝试兼容修正，每次重试仅应用第一个匹配规则。
+    # 规则按优先级排序；每个规则用 error_body 做二次确认。
     # ------------------------------------------------------------------
 
-    _COMPATIBLE_RETRY_PATTERNS: list[dict] = [
-        # Ali DashScope: top_p must be in (0,1) open interval
-        {"check": lambda b, r: b.get("top_p") is not None and b["top_p"] >= 1,
-         "apply": lambda b: {**b, "top_p": 0.999}},
-        # stream_options {include_usage: true} on non-streaming requests
-        {"check": lambda b, r: b.get("stream") is True and b.get("stream_options") is not None,
-         "apply": lambda b: {**b, "stream_options": None}},
-        # Unknown field rejected; try stripping stream_options entirely
-        {"check": lambda b, r: b.get("stream_options") is not None,
-         "apply": lambda b: {**b, "stream_options": None}},
-        # Some upstreams reject stream_options.include_usage
-        {"check": lambda b, r: isinstance(b.get("stream_options"), dict) and "include_usage" in b["stream_options"],
-         "apply": lambda b: {**b, "stream_options": {"include_usage": False}}},
-        # Parallel_tool_calls not supported
-        {"check": lambda b, r: b.get("parallel_tool_calls") is not None,
-         "apply": lambda b: {**b, "parallel_tool_calls": None}},
+    @staticmethod
+    def _top_p_out_of_range(body: dict, error_body: str) -> bool:
+        return body.get("top_p") is not None and body["top_p"] >= 1
+
+    @staticmethod
+    def _apply_top_p_clamp(body: dict) -> dict:
+        return {**body, "top_p": 0.999}
+
+    @staticmethod
+    def _stream_options_rejected(body: dict, error_body: str) -> bool:
+        return body.get("stream_options") is not None
+
+    @staticmethod
+    def _apply_strip_stream_options(body: dict) -> dict:
+        return {**body, "stream_options": None}
+
+    @staticmethod
+    def _include_usage_rejected(body: dict, error_body: str) -> bool:
+        opts = body.get("stream_options")
+        return isinstance(opts, dict) and opts.get("include_usage") is True
+
+    @staticmethod
+    def _apply_disable_include_usage(body: dict) -> dict:
+        return {**body, "stream_options": {"include_usage": False}}
+
+    @staticmethod
+    def _parallel_tool_calls_rejected(body: dict, error_body: str) -> bool:
+        return body.get("parallel_tool_calls") is not None
+
+    @staticmethod
+    def _apply_strip_parallel_tool_calls(body: dict) -> dict:
+        return {**body, "parallel_tool_calls": None}
+
+    @staticmethod
+    def _platform_thinking_not_supported(body: dict, error_body: str) -> bool:
+        return body.get("thinking") is not None
+
+    @staticmethod
+    def _apply_strip_thinking(body: dict) -> dict:
+        return {**body, "thinking": None}
+
+    _RETRY_RULES: list[tuple] = [
+        (_top_p_out_of_range, _apply_top_p_clamp),
+        (_include_usage_rejected, _apply_disable_include_usage),
+        (_stream_options_rejected, _apply_strip_stream_options),
+        (_parallel_tool_calls_rejected, _apply_strip_parallel_tool_calls),
+        (_platform_thinking_not_supported, _apply_strip_thinking),
     ]
 
-    def _has_compatible_retry(self, body: dict, error_text: str) -> bool:
-        return any(p["check"](body, error_text) for p in self._COMPATIBLE_RETRY_PATTERNS)
-
-    def _apply_compatible_body(self, body: dict, error_text: str) -> dict:
-        result = dict(body)
-        for p in self._COMPATIBLE_RETRY_PATTERNS:
-            if p["check"](result, error_text):
-                result = p["apply"](result)
-        return result
+    def _retry_body(self, body: dict, error_body: str) -> dict | None:
+        """对 body 应用第一个匹配的兼容规则，返回修正后的 body 或 None（无匹配）。"""
+        for check, apply in self._RETRY_RULES:
+            if check(self, body, error_body):
+                return apply(self, body)
+        return None
 
     async def create_chat_completion(self, payload: Any) -> dict[str, Any]:
         body = payload.model_dump(mode="json", exclude_none=True)
@@ -85,10 +114,12 @@ class UpstreamClient:
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, headers=headers, json=body)
-            if response.status_code == 400 and self._has_compatible_retry(body, response.text):
-                body = self._apply_compatible_body(body, response.text)
-                async with httpx.AsyncClient(timeout=timeout) as client:
-                    response = await client.post(url, headers=headers, json=body)
+            if response.status_code == 400:
+                error_text = response.text
+                retried = self._retry_body(body, error_text)
+                if retried is not None:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        response = await client.post(url, headers=headers, json=retried)
             response.raise_for_status()
             return response.json()
 

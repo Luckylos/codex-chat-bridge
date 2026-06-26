@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 import json
 from typing import Any
 
@@ -11,7 +10,7 @@ def extract_block(buffer: str) -> tuple[str, str] | None:
     """从 buffer 中提取第一个完整的 SSE frame block。
 
     返回 (block, remaining_buffer) 或 None（没有完整帧）。
-    帧分隔符为连续两个换行 \\n\\n。
+    帧分隔符为连续两个换行 \n\n。
     """
     marker = "\n\n"
     idx = buffer.find(marker)
@@ -74,25 +73,16 @@ def sse_done() -> bytes:
     return b"data: [DONE]\n\n"
 
 
-def parse_sse_text(chunk: str) -> str | None:
-    """从 SSE data 行提取纯文本内容（丢弃 event 行）。"""
-    parts: list[str] = []
-    for line in chunk.splitlines():
-        if line.startswith("data:"):
-            parts.append(line.split(":", 1)[1].lstrip())
-    return "\n".join(parts) if parts else None
-
-
-async def iter_sse_bytes(
-    source: Iterable[str],
+def iter_sse_bytes_as_list(
+    chunks: list[str],
 ) -> list[tuple[str | None, dict | None]]:
-    """从迭代器源（连接 SSE 块）产生 (event, parsed_data) 元组。
+    """从 SSE chunk 列表解析出 (event, parsed_data) 列表。
 
     用于测试和调试。生产环境使用 stream_chat_to_responses 序列化。
     """
     result: list[tuple[str | None, dict | None]] = []
     buffer = ""
-    for chunk in source:
+    for chunk in chunks:
         buffer += chunk
         while True:
             extracted = extract_block(buffer)
