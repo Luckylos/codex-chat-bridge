@@ -24,6 +24,105 @@ EXTRA_CHAT_PASSTHROUGH_FIELDS = (
     "user",
 )
 
+# 明确列出 Responses 内置工具类型，bridge 无法转发给 Chat Completions 上游
+# 这些工具需要上游原生支持或由客户端直接调用
+BUILT_IN_RESPONSES_TOOLS = {
+    "web_search",
+    "web_search_preview",
+    "file_search",
+    "computer_use",
+    "computer_use_preview",
+    "code_interpreter",
+    "image_generation",
+    "mcp",
+}
+
+# 仅允许 https:// 和 data:image/ 两种 image URL scheme
+# 拒绝 file://, http://(SSRF 风险), ftp:// 等
+_ALLOWED_IMAGE_SCHEMES = ("https://", "data:image/")
+
+
+def is_safe_image_url(url: str | None) -> bool:
+    """检查 image URL 是否安全，防止 SSRF 和内网泄露。
+
+    允许 scheme:
+      - https://        — 标准外链
+      - data:image/     — inline base64 图片
+
+    拒绝:
+      - file://         — 本地文件读取
+      - http://         — 内网/云元数据攻击向量
+      - ftp:// 等
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    return url.startswith(_ALLOWED_IMAGE_SCHEMES)
+
+
+def _sanitize_chat_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
+    """三段式消息归一化流水线。
+
+    1. 去空: 过滤掉 content 为空且没有 tool_calls 的消息
+    2. 合并: 合并相邻同 role 消息（避免上游拒绝连续 user→user）
+    3. 角色归一: 确保 role 值合规
+    """
+    if not messages:
+        return messages
+
+    # Step 1: 去空 — 仅过滤完全空白的 assistant/tool 消息
+    sanitized: list[ChatMessage] = []
+    for msg in messages:
+        has_content = msg.content is not None and msg.content != "" and not (
+            isinstance(msg.content, list) and not msg.content
+        )
+        has_tool_calls = bool(msg.tool_calls)
+        has_tool_call_id = bool(msg.tool_call_id)
+        # 保留 user/system 即使 content 为空（上游可能需要 context 占位）
+        if msg.role in ("user", "system"):
+            sanitized.append(msg)
+        elif has_content or has_tool_calls or has_tool_call_id:
+            sanitized.append(msg)
+    if not sanitized:
+        return sanitized
+
+    # Step 2: 合并相邻同 role 消息
+    merged: list[ChatMessage] = [sanitized[0]]
+    for msg in sanitized[1:]:
+        prev = merged[-1]
+        if _messages_are_mergeable(prev, msg):
+            merged[-1] = _merge_messages(prev, msg)
+        else:
+            merged.append(msg)
+
+    # Step 3: role 合规检查 — 不强制插入占位，交给上游处理
+
+    return merged
+
+
+def _messages_are_mergeable(a: ChatMessage, b: ChatMessage) -> bool:
+    """两条消息是否可以合并
+    当前仅 system 消息需要合并（collapse_system_messages_to_head 已处理）。
+    """
+    if a.role != b.role:
+        return False
+    return a.role in ("system",)
+
+
+def _merge_messages(a: ChatMessage, b: ChatMessage) -> ChatMessage:
+    """合并两条相邻同 role 消息"""
+    merged_content = _merge_content(a.content, b.content)
+    if a.role == "tool":
+        return ChatMessage(role="tool", content=merged_content)
+    return ChatMessage(role=a.role, content=merged_content)
+
+
+def _merge_content(a: Any, b: Any) -> str | list | None:
+    """合并两条消息的内容字段"""
+    a_text = flatten_text_content(a).strip()
+    b_text = flatten_text_content(b).strip()
+    merged = "\n\n".join(p for p in [a_text, b_text] if p)
+    return merged or None
+
 
 def normalize_tool_output_content(value: Any) -> str:
     if value is None:
@@ -86,11 +185,22 @@ def flatten_text_content(content: Any) -> str:
 def chat_image_part_from_input_item(item: dict[str, Any]) -> dict[str, Any]:
     image_value = item.get("image_url")
     if isinstance(image_value, str) and image_value:
-        payload: dict[str, Any] = {"url": image_value}
+        url = image_value
     elif isinstance(image_value, dict) and isinstance(image_value.get("url"), str) and image_value.get("url"):
+        url = image_value["url"]
         payload = dict(image_value)
     else:
         raise UnsupportedResponsesInputItemError(item.get("type") if isinstance(item.get("type"), str) else None, item)
+    if not is_safe_image_url(url):
+        raise UnsupportedResponsesInputItemError(
+            item.get("type") if isinstance(item.get("type"), str) else None,
+            item,
+            detail=f"Rejected unsafe image URL scheme (only https:// and data:image/ allowed): {url[:60]}",
+        )
+    if isinstance(image_value, dict):
+        payload = dict(image_value)
+    else:
+        payload: dict[str, Any] = {"url": url}
     detail = item.get("detail")
     if isinstance(detail, str) and detail and "detail" not in payload:
         payload["detail"] = detail

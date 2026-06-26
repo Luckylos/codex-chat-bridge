@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+import json
 from typing import Any
 
 import httpx
@@ -44,13 +45,50 @@ class UpstreamClient:
             headers["Authorization"] = f"Bearer {self._settings.upstream_api_key}"
         return headers
 
+    # ------------------------------------------------------------------
+    # 400 compatible retry — upstream 返回 400 时尝试兼容重试
+    # ------------------------------------------------------------------
+
+    _COMPATIBLE_RETRY_PATTERNS: list[dict] = [
+        # Ali DashScope: top_p must be in (0,1) open interval
+        {"check": lambda b, r: b.get("top_p") is not None and b["top_p"] >= 1,
+         "apply": lambda b: {**b, "top_p": 0.999}},
+        # stream_options {include_usage: true} on non-streaming requests
+        {"check": lambda b, r: b.get("stream") is True and b.get("stream_options") is not None,
+         "apply": lambda b: {**b, "stream_options": None}},
+        # Unknown field rejected; try stripping stream_options entirely
+        {"check": lambda b, r: b.get("stream_options") is not None,
+         "apply": lambda b: {**b, "stream_options": None}},
+        # Some upstreams reject stream_options.include_usage
+        {"check": lambda b, r: isinstance(b.get("stream_options"), dict) and "include_usage" in b["stream_options"],
+         "apply": lambda b: {**b, "stream_options": {"include_usage": False}}},
+        # Parallel_tool_calls not supported
+        {"check": lambda b, r: b.get("parallel_tool_calls") is not None,
+         "apply": lambda b: {**b, "parallel_tool_calls": None}},
+    ]
+
+    def _has_compatible_retry(self, body: dict, error_text: str) -> bool:
+        return any(p["check"](body, error_text) for p in self._COMPATIBLE_RETRY_PATTERNS)
+
+    def _apply_compatible_body(self, body: dict, error_text: str) -> dict:
+        result = dict(body)
+        for p in self._COMPATIBLE_RETRY_PATTERNS:
+            if p["check"](result, error_text):
+                result = p["apply"](result)
+        return result
+
     async def create_chat_completion(self, payload: Any) -> dict[str, Any]:
-        async with httpx.AsyncClient(timeout=self._settings.upstream_timeout_seconds) as client:
-            response = await client.post(
-                self._chat_completions_url(),
-                headers=self._headers(),
-                json=payload.model_dump(mode="json", exclude_none=True),
-            )
+        body = payload.model_dump(mode="json", exclude_none=True)
+        url = self._chat_completions_url()
+        headers = self._headers()
+        timeout = self._settings.upstream_timeout_seconds
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, headers=headers, json=body)
+            if response.status_code == 400 and self._has_compatible_retry(body, response.text):
+                body = self._apply_compatible_body(body, response.text)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.post(url, headers=headers, json=body)
             response.raise_for_status()
             return response.json()
 

@@ -35,6 +35,22 @@ class BridgeToolContext:
             return flatten_namespace_tool_name(namespace, name)
         return name
 
+    def restore_namespace_and_name(self, chat_name: str) -> tuple[str | None, str]:
+        """Given a chat-side flattened tool name, recover the original (namespace, name).
+
+        Returns (namespace, name) where namespace is None for non-namespaced tools.
+        Used when translating tool_calls from Chat back to Responses format.
+        """
+        spec = self.chat_name_to_spec.get(chat_name)
+        if spec is not None:
+            return spec.namespace, spec.name
+        # Fallback: try to split on last __ separator
+        if "__" in chat_name:
+            ns, _, n = chat_name.rpartition("__")
+            if ns and n:
+                return ns, n
+        return None, chat_name
+
     def add_chat_tool(self, chat_name: str, spec: ToolSpec, chat_tool: dict[str, Any]) -> None:
         if not chat_name.strip() or chat_name in self._seen_chat_names:
             return

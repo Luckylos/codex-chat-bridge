@@ -8,7 +8,10 @@ from ..bridge_context import build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
 from ..models import ResponsesRequest
-from ..stream_chat_to_responses import create_responses_sse_stream_from_chat_stream
+from ..stream_chat_to_responses import (
+    create_responses_sse_from_chat_response,
+    create_responses_sse_stream_from_chat_stream,
+)
 from ..transform_responses_to_chat import UnsupportedResponsesInputItemError, responses_to_chat_request
 from ..upstream import UpstreamClient
 from .errors import build_error_response, invalid_request_error
@@ -61,10 +64,14 @@ async def _create_response_impl(payload: ResponsesRequest):
 
         client = UpstreamClient(settings)
         if payload.stream:
-            stream = create_responses_sse_stream_from_chat_stream(
-                client.stream_chat_completion(chat_request),
-                tool_context,
-            )
+            if settings.upstream_streaming:
+                stream = create_responses_sse_stream_from_chat_stream(
+                    client.stream_chat_completion(chat_request),
+                    tool_context,
+                )
+            else:
+                chat_body = await client.create_chat_completion(chat_request)
+                stream = create_responses_sse_from_chat_response(chat_body, tool_context)
             return StreamingResponse(stream, media_type="text/event-stream")
 
         chat_body = await client.create_chat_completion(chat_request)

@@ -4,8 +4,12 @@ from typing import Any
 
 
 class UnsupportedResponsesInputItemError(ValueError):
-    def __init__(self, item_type: str | None, item: Any) -> None:
+    def __init__(self, item_type: str | None, item: Any, detail: str | None = None) -> None:
         label = item_type or type(item).__name__
-        super().__init__(f"Unsupported top-level Responses input item: {label}")
+        msg = f"Unsupported top-level Responses input item: {label}"
+        if detail:
+            msg = f"{msg}: {detail}"
+        super().__init__(msg)
         self.item_type = item_type
         self.item = item
+        self.detail = detail
