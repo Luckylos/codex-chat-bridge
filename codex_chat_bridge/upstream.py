@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 import logging
+import random
 from typing import Any
 
 import httpx
@@ -9,6 +11,26 @@ import httpx
 from .config import Settings
 
 _logger = logging.getLogger("codex-chat-bridge.upstream")
+
+_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _retryable_status(status_code: int) -> bool:
+    return status_code in _RETRYABLE_STATUSES
+
+
+def _retryable_exception(exc: Exception) -> bool:
+    """Network-level errors that are safe to retry."""
+    return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError,
+                            httpx.RemoteProtocolError, httpx.ReadError,
+                            httpx.WriteError))
+
+
+def _backoff_delay(attempt: int, base: float = 0.5, max_delay: float = 30.0) -> float:
+    """Exponential backoff with jitter: base * 2^attempt + random(0, base)."""
+    delay = min(base * (2 ** attempt), max_delay)
+    jitter = random.uniform(0, base)
+    return delay + jitter
 
 
 class UpstreamClient:
@@ -109,42 +131,131 @@ class UpstreamClient:
                 return apply(self, body)
         return None
 
+    # ------------------------------------------------------------------
+    # Transient retry (429 / 5xx / network errors)
+    # ------------------------------------------------------------------
+
+    async def _post_with_retry(
+        self, url: str, headers: dict, body: dict,
+        *, is_stream: bool = False,
+    ) -> httpx.Response:
+        """POST with retry on 429/5xx/network errors using exponential backoff."""
+        max_retries = self._settings.upstream_max_retries
+        last_error: Exception | None = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self._settings.upstream_timeout_seconds,
+                ) as client:
+                    if is_stream:
+                        response = await client.send(
+                            client.build_request("POST", url, headers=headers, json=body),
+                        )
+                    else:
+                        response = await client.post(url, headers=headers, json=body)
+
+                if response.status_code == 400:
+                    # Existing 400-compatible retry (one attempt)
+                    error_text = response.text
+                    retried = self._retry_body(body, error_text)
+                    if retried is not None:
+                        _logger.info(
+                            "upstream 400 retry: mode=%s",
+                            [p[0].__name__ for p in self._RETRY_RULES
+                             if p[0](self, body, error_text)],
+                        )
+                        async with httpx.AsyncClient(
+                            timeout=self._settings.upstream_timeout_seconds,
+                        ) as client:
+                            if is_stream:
+                                response = await client.send(
+                                    client.build_request("POST", url, headers=headers, json=retried),
+                                )
+                            else:
+                                response = await client.post(url, headers=headers, json=retried)
+                    else:
+                        _logger.warning("upstream 400 with no compatible retry: %.200s", error_text)
+                    response.raise_for_status()
+                    return response
+
+                if _retryable_status(response.status_code) and attempt < max_retries:
+                    delay = _backoff_delay(attempt)
+                    _logger.warning(
+                        "upstream %d %s (attempt %d/%d) — retry in %.1fs",
+                        response.status_code, "stream" if is_stream else "body",
+                        attempt + 1, max_retries + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                response.raise_for_status()
+                return response
+
+            except (httpx.TimeoutException, httpx.ConnectError,
+                    httpx.RemoteProtocolError, httpx.ReadError,
+                    httpx.WriteError) as exc:
+                last_error = exc
+                if attempt < max_retries:
+                    delay = _backoff_delay(attempt)
+                    _logger.warning(
+                        "upstream network error %r (attempt %d/%d) — retry in %.1fs",
+                        exc, attempt + 1, max_retries + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
+        # NB: bare raise after loop is unreachable — final attempt either returns
+        # (via response.raise_for_status()) or raises inside the except handler.
+
+
     async def create_chat_completion(self, payload: Any) -> dict[str, Any]:
         body = payload.model_dump(mode="json", exclude_none=True)
         url = self._chat_completions_url()
         headers = self._headers()
-        timeout = self._settings.upstream_timeout_seconds
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url, headers=headers, json=body)
-            if response.status_code == 400:
-                error_text = response.text
-                retried = self._retry_body(body, error_text)
-                if retried is not None:
-                    _logger.info(
-                        "upstream 400 retry: mode=%s body_keys=%s",
-                        [p[0].__name__ for p in self._RETRY_RULES if p[0](self, body, error_text)],
-                        list(retried.keys()),
-                    )
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        response = await client.post(url, headers=headers, json=retried)
-                else:
-                    _logger.warning("upstream 400 with no compatible retry: %.200s", error_text)
-            response.raise_for_status()
-            return response.json()
+        response = await self._post_with_retry(url, headers, body)
+        return response.json()
 
     async def stream_chat_completion(self, payload: Any) -> AsyncIterator[bytes]:
-        async with httpx.AsyncClient(timeout=self._settings.upstream_timeout_seconds) as client:
-            async with client.stream(
-                "POST",
-                self._chat_completions_url(),
-                headers=self._headers(),
-                json=payload.model_dump(mode="json", exclude_none=True),
-            ) as response:
-                response.raise_for_status()
-                async for chunk in response.aiter_bytes():
-                    if chunk:
-                        yield chunk
+        body = payload.model_dump(mode="json", exclude_none=True)
+        url = self._chat_completions_url()
+        headers = self._headers()
+
+        max_retries = self._settings.upstream_max_retries
+        for attempt in range(max_retries + 1):
+            try:
+                async with httpx.AsyncClient(
+                    timeout=self._settings.upstream_timeout_seconds,
+                ) as client:
+                    async with client.stream(
+                        "POST", url, headers=headers, json=body,
+                    ) as response:
+                        if _retryable_status(response.status_code) and attempt < max_retries:
+                            delay = _backoff_delay(attempt)
+                            _logger.warning(
+                                "upstream %d stream (attempt %d/%d) — retry in %.1fs",
+                                response.status_code, attempt + 1, max_retries + 1, delay,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            if chunk:
+                                yield chunk
+                        return
+            except (httpx.TimeoutException, httpx.ConnectError,
+                    httpx.RemoteProtocolError, httpx.ReadError,
+                    httpx.WriteError) as exc:
+                if attempt < max_retries:
+                    delay = _backoff_delay(attempt)
+                    _logger.warning(
+                        "upstream stream network error %r (attempt %d/%d) — retry in %.1fs",
+                        exc, attempt + 1, max_retries + 1, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                raise
 
     async def list_models(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=self._settings.upstream_timeout_seconds) as client:

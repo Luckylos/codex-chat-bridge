@@ -1,9 +1,14 @@
 import httpx
+import logging
 import uuid
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from starlette.responses import Response as StarletteResponse
 
+from ..app import validate_config
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
@@ -15,16 +20,65 @@ from ..stream_chat_to_responses import (
 )
 from ..transform_responses_to_chat import UnsupportedResponsesInputItemError, responses_to_chat_request
 from ..upstream import UpstreamClient
+from .concurrency import _get_semaphore
 from .errors import build_error_response, invalid_request_error
+from .middleware import RequestLogMiddleware
 from .policy import validate_effective_messages
+from ..metrics import concurrency_usage
+
+_logger = logging.getLogger("codex-chat-bridge")
+_access_logger = logging.getLogger("codex-chat-bridge.access")
+_health_upstream_reachable: bool | None = None
 
 
-app = FastAPI(title="codex-chat-bridge", version="0.3.0")
+@asynccontextmanager
+async def _bridge_lifespan(_app: FastAPI):
+    """Startup: configure logging, validate config, check upstream. Shutdown."""
+    global _health_upstream_reachable
+
+    # Ensure access logger has a handler if none configured
+    if not _access_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        _access_logger.addHandler(handler)
+        _access_logger.setLevel(logging.INFO)
+
+    try:
+        validate_config()
+    except RuntimeError as exc:
+        _logger.error("Startup config validation failed: %s", exc)
+        raise
+    try:
+        models = await UpstreamClient(get_settings()).list_models()
+        _health_upstream_reachable = True
+        _logger.info("Upstream connectivity: ok (%d upstream models)", len(models))
+    except Exception as exc:
+        _health_upstream_reachable = False
+        _logger.warning("Upstream connectivity check failed: %s", exc)
+
+    yield
+    _logger.info("Shutdown complete.")
+
+
+app = FastAPI(title="codex-chat-bridge", version="0.4.0", lifespan=_bridge_lifespan)
+app.add_middleware(RequestLogMiddleware)
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "service": "codex-chat-bridge"}
+    return {
+        "ok": True,
+        "service": "codex-chat-bridge",
+        "upstream_reachable": _health_upstream_reachable,
+    }
+
+
+@app.get("/metrics")
+async def metrics() -> StarletteResponse:
+    return StarletteResponse(
+        content=generate_latest(),
+        media_type=CONTENT_TYPE_LATEST,
+    )
 
 
 @app.get("/v1/models")
@@ -49,6 +103,16 @@ async def create_response_compact(payload: ResponsesRequest):
 
 
 async def _create_response_impl(payload: ResponsesRequest):
+    sem = _get_semaphore()
+    concurrency_usage.inc()
+    try:
+        async with sem:
+            return await _create_response_core(payload)
+    finally:
+        concurrency_usage.dec()
+
+
+async def _create_response_core(payload: ResponsesRequest):
     try:
         settings = get_settings()
         resolved_model = (payload.model or "").strip()

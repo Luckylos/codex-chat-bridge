@@ -53,6 +53,8 @@ class Settings:
     upstream_api_key: str = ""
     upstream_timeout_seconds: float = 60.0
     upstream_streaming: bool = True
+    upstream_max_retries: int = 2
+    max_concurrent_requests: int = 20
     unsupported_tool_policy: str = "ignore"
     public_base_url: str = "http://127.0.0.1:18090/v1"
     reasoning_mode: str = ReasoningMode.EFFORT

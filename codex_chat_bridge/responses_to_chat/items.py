@@ -122,6 +122,9 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             )
             continue
         if item_type == "tool_search_call":
+            call_id = item.get("call_id") or item.get("id") or ""
+            if call_id in skip_call_ids:
+                continue
             pending_tool_calls.append(
                 {
                     "id": item.get("call_id") or item.get("id") or "call_0",

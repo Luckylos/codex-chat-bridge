@@ -533,6 +533,95 @@ class DuplicateCallIdDedupTests(unittest.TestCase):
         self.assertEqual(messages[-1]["role"], "user")
         self.assertEqual(messages[-1]["content"], "and now?")
 
+    def test_custom_tool_call_with_existing_call_id_is_skipped(self) -> None:
+        """custom_tool_call with existing call_id is skipped."""
+        payload = ResponsesRequest.model_validate({
+            "input": [
+                {"type": "custom_tool_call", "id": "ctc_1", "name": "apply_patch", "input": "patch text"},
+                {"type": "custom_tool_call_output", "call_id": "ctc_1", "output": "ok"},
+                {"type": "custom_tool_call", "id": "ctc_1", "name": "apply_patch", "input": "patch text"},
+                {"type": "custom_tool_call_output", "call_id": "ctc_1", "output": "ok"},
+                {"type": "message", "role": "user", "content": "next"},
+            ]
+        })
+        existing = [
+            ChatMessage(role="user", content="first"),
+            ChatMessage(role="assistant", content=None, tool_calls=[
+                {"id": "ctc_1", "type": "function", "function": {"name": "apply_patch", "arguments": '{"input":"patch text"}'}},
+            ]),
+            ChatMessage(role="tool", tool_call_id="ctc_1", content="ok"),
+        ]
+        request = responses_to_chat_request(payload, "fallback-model", existing_messages=existing)
+        messages = [m.model_dump(exclude_none=True) for m in request.messages]
+        tool_calls_count = sum(1 for m in messages if m.get("tool_calls"))
+        tool_output_count = sum(1 for m in messages if m.get("role") == "tool" and m.get("tool_call_id") == "ctc_1")
+        self.assertLessEqual(tool_calls_count, 1, f"custom tool_calls should be 0 or 1, got={tool_calls_count}")
+        self.assertLessEqual(tool_output_count, 1, f"custom tool output for ctc_1 should be 0 or 1, got={tool_output_count}")
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertEqual(messages[-1]["content"], "next")
+
+    def test_tool_search_call_dedup_also_respects_existing_call_ids(self) -> None:
+        """tool_search_call and tool_search_output with existing call_id are skipped."""
+        payload = ResponsesRequest.model_validate({
+            "input": [
+                {"type": "tool_search_call", "call_id": "tsc_1", "query": "find tools"},
+                {"type": "tool_search_output", "call_id": "tsc_1", "output": {"results": []}},
+                {"type": "tool_search_call", "call_id": "tsc_1", "query": "find tools"},
+                {"type": "tool_search_output", "call_id": "tsc_1", "output": {"results": []}},
+                {"role": "user", "content": "done"},
+            ]
+        })
+        existing = [
+            ChatMessage(role="assistant", content=None, tool_calls=[
+                {"id": "tsc_1", "type": "function", "function": {"name": "tool_search_proxy", "arguments": '{"query":"find tools"}'}},
+            ]),
+            ChatMessage(role="tool", tool_call_id="tsc_1", content='{"call_id":"tsc_1","output":{"results":[]},"type":"tool_search_output"}'),
+        ]
+        request = responses_to_chat_request(payload, "fallback-model", existing_messages=existing)
+        messages = [m.model_dump(exclude_none=True) for m in request.messages]
+        # Only check messages ADDED by the payload (after existing messages)
+        added_messages = messages[len(existing):]
+        tool_calls_count = sum(1 for m in added_messages if m.get("tool_calls"))
+        tool_output_count = sum(1 for m in added_messages if m.get("role") == "tool" and m.get("tool_call_id") == "tsc_1")
+        self.assertLessEqual(tool_calls_count, 0, f"tool_search calls should be 0, got={tool_calls_count}")
+        self.assertLessEqual(tool_output_count, 1, f"tool_search output should be 0 or 1, got={tool_output_count}")
+        self.assertEqual(messages[-1]["role"], "user")
+
+    def test_dedup_skips_only_duplicate_and_preserves_new_call_ids(self) -> None:
+        """Only duplicate calls skipped; new call_ids are appended normally."""
+        payload = ResponsesRequest.model_validate({
+            "input": [
+                {"type": "function_call", "call_id": "call_old", "name": "get_weather", "arguments": {"city": "Tokyo"}},
+                {"type": "function_call_output", "call_id": "call_old", "output": "sunny"},
+                {"type": "function_call", "call_id": "call_new", "name": "get_weather", "arguments": {"city": "Osaka"}},
+                {"type": "function_call_output", "call_id": "call_new", "output": "rain"},
+            ]
+        })
+        existing = [
+            ChatMessage(role="assistant", content=None, tool_calls=[
+                {"id": "call_old", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}},
+            ]),
+            ChatMessage(role="tool", tool_call_id="call_old", content="sunny"),
+        ]
+        request = responses_to_chat_request(payload, "fallback-model", existing_messages=existing)
+        messages = [m.model_dump(exclude_none=True) for m in request.messages]
+        # call_old should NOT produce a second tool_call; call_new SHOULD
+        # Only check messages added by the payload (after existing)
+        added_messages = messages[len(existing):]
+        new_tool_calls = [m for m in added_messages if m.get("tool_calls")]
+        new_tool_outputs = [m for m in added_messages if m.get("role") == "tool"]
+        # The new call_new pair: assistant (with tool_calls) + tool (output)
+        self.assertEqual(len(new_tool_calls), 1, f"Expected 1 new tool_call assistant, got {len(new_tool_calls)}")
+        self.assertEqual(len(new_tool_outputs), 1, f"Expected 1 new tool output, got {len(new_tool_outputs)}")
+        call_ids = set()
+        for tc_list in [m.get("tool_calls", []) for m in new_tool_calls]:
+            for tc in tc_list:
+                cid = tc.get("id") or tc.get("call_id")
+                if cid:
+                    call_ids.add(cid)
+        self.assertIn("call_new", call_ids)
+        self.assertNotIn("call_old", call_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

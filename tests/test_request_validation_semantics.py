@@ -19,6 +19,215 @@ def _single_upstream_settings() -> Settings:
 
 
 class RequestValidationSemanticsTests(unittest.TestCase):
+    def test_chat_format_input_item_user_message(self) -> None:
+        """input_items with role='user' via message item type."""
+        captured_messages = []
+
+        class FakeUpstreamClient:
+            def __init__(self, settings) -> None:
+                self.settings = settings
+
+            async def create_chat_completion(self, payload):
+                captured_messages.append([message.model_dump(exclude_none=True) for message in payload.messages])
+                return {
+                    "id": "chatcmpl_demo",
+                    "object": "chat.completion",
+                    "created": 1710000000,
+                    "model": payload.model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+        client = TestClient(app)
+        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        ):
+            response = client.post("/v1/responses", json={
+                "model": "test-model",
+                "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello from chat item"}]}],
+            })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(captured_messages), 1)
+        self.assertEqual(captured_messages[0][0]["content"], "hello from chat item")
+        self.assertEqual(captured_messages[0][0]["role"], "user")
+
+    def test_chat_format_input_item_assistant_with_reasoning_and_tool_calls(self) -> None:
+        """input_items with role='assistant' containing tool_calls and reasoning_content."""
+        captured_messages = []
+
+        class FakeUpstreamClient:
+            def __init__(self, settings) -> None:
+                self.settings = settings
+
+            async def create_chat_completion(self, payload):
+                captured_messages.append([message.model_dump(exclude_none=True) for message in payload.messages])
+                return {
+                    "id": "chatcmpl_demo",
+                    "object": "chat.completion",
+                    "created": 1710000000,
+                    "model": payload.model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+        client = TestClient(app)
+        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        ):
+            response = client.post("/v1/responses", json={
+                "model": "test-model",
+                "input": [
+                    {"role": "user", "content": "trigger"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "Need data first.",
+                        "tool_calls": [
+                            {"id": "call_x1", "type": "function", "function": {"name": "get_data", "arguments": "{}"}},
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_x1", "content": "data ok"},
+                    {"role": "user", "content": "summarize"},
+                ],
+            })
+
+        self.assertEqual(response.status_code, 200)
+        msgs = captured_messages[0]
+        self.assertEqual(len(msgs), 4)
+        # assistant message preserves reasoning and tool_calls
+        self.assertEqual(msgs[1]["role"], "assistant")
+        self.assertEqual(msgs[1].get("reasoning_content"), "Need data first.")
+        self.assertEqual(len(msgs[1]["tool_calls"]), 1)
+        self.assertEqual(msgs[2]["role"], "tool")
+        self.assertEqual(msgs[2]["tool_call_id"], "call_x1")
+
+    def test_chat_format_input_item_system_and_developer_mapped_to_system(self) -> None:
+        """input_items with role='system' or 'developer' map to chat system role."""
+        captured_messages = []
+
+        class FakeUpstreamClient:
+            def __init__(self, settings) -> None:
+                self.settings = settings
+
+            async def create_chat_completion(self, payload):
+                captured_messages.append([message.model_dump(exclude_none=True) for message in payload.messages])
+                return {
+                    "id": "chatcmpl_demo",
+                    "object": "chat.completion",
+                    "created": 1710000000,
+                    "model": payload.model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+        client = TestClient(app)
+        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        ):
+            response = client.post("/v1/responses", json={
+                "model": "test-model",
+                "input": [
+                    {"role": "developer", "content": [{"type": "input_text", "text": "dev note"}]},
+                    {"role": "system", "content": "sys note"},
+                    {"role": "user", "content": "hello"},
+                ],
+            })
+
+        self.assertEqual(response.status_code, 200)
+        msgs = captured_messages[0]
+        # developer + system messages are collapsed to head and merged into one
+        self.assertEqual(msgs[0]["role"], "system")
+        self.assertIn("dev note", msgs[0]["content"])
+        self.assertIn("sys note", msgs[0]["content"])
+        self.assertEqual(msgs[1]["role"], "user")
+
+    def test_chat_format_input_item_with_previous_response_id(self) -> None:
+        """Chat format input_items work with previous_response_id session recovery."""
+        captured_requests = []
+
+        class FakeUpstream:
+            def __init__(self, settings) -> None:
+                self.call_count = 0
+
+            async def create_chat_completion(self, payload):
+                self.call_count += 1
+                captured_requests.append([message.model_dump(exclude_none=True) for message in payload.messages])
+                return {
+                    "id": f"chatcmpl_{self.call_count}",
+                    "object": "chat.completion",
+                    "created": 123,
+                    "model": "test-model",
+                    "choices": [{"message": {"role": "assistant", "content": f"R{self.call_count}"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+                }
+
+            async def list_models(self):
+                return []
+
+        client = TestClient(app)
+        fake = FakeUpstream(None)
+        fake.settings = None
+
+        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.routes.UpstreamClient", return_value=fake,
+        ):
+            # First request
+            resp_a = client.post("/v1/responses", json={
+                "model": "test-model",
+                "input": [{"role": "user", "content": "first"}],
+            })
+            self.assertEqual(resp_a.status_code, 200)
+            rid = resp_a.json()["id"]
+
+            # Second request — also uses chat format items
+            resp_b = client.post("/v1/responses", json={
+                "model": "test-model",
+                "previous_response_id": rid,
+                "input": [{"role": "user", "content": "second"}, {"role": "user", "content": "third"}],
+            })
+            self.assertEqual(resp_b.status_code, 200)
+            self.assertEqual(fake.__dict__.get("call_count", 0), 2)
+
+            # Upstream received: [prev_messages_context..., first, second, third]
+            # Context from session = ["first", "R1"], + "second", "third"
+            final_msgs = captured_requests[1]
+            self.assertGreaterEqual(len(final_msgs), 3)
+            # The session recovered messages include the previous assistant response
+            self.assertTrue(any("R1" in str(m) for m in final_msgs))
+
+    def test_chat_format_input_item_unknown_role_falls_back_to_user(self) -> None:
+        """Unknown role in chat format input items falls back to user."""
+        captured_messages = []
+
+        class FakeUpstreamClient:
+            def __init__(self, settings) -> None:
+                self.settings = settings
+
+            async def create_chat_completion(self, payload):
+                captured_messages.append([message.model_dump(exclude_none=True) for message in payload.messages])
+                return {
+                    "id": "chatcmpl_demo",
+                    "object": "chat.completion",
+                    "created": 1710000000,
+                    "model": payload.model,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+                }
+
+        client = TestClient(app)
+        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        ):
+            response = client.post("/v1/responses", json={
+                "model": "test-model",
+                "input": [{"role": "unknown_bot", "content": "hello"}],
+            })
+
+        self.assertEqual(response.status_code, 200)
+        msgs = captured_messages[0]
+        self.assertEqual(msgs[0]["role"], "user")
+
     def test_models_endpoint_passthroughs_upstream_catalog(self) -> None:
         class FakeUpstreamClient:
             def __init__(self, settings) -> None:
