@@ -20,6 +20,24 @@ from .common import (
 from .errors import UnsupportedResponsesInputItemError
 
 
+def _existing_call_ids(messages: list[ChatMessage]) -> set[str]:
+    """Scan messages for already-present call_ids (from tool_calls and tool_call_id).
+
+    Used by append_input_items_as_chat_messages when continuing a session
+    to skip duplicate function_call / function_call_output items.
+    """
+    ids: set[str] = set()
+    for msg in messages:
+        if msg.tool_call_id:
+            ids.add(msg.tool_call_id)
+        if msg.tool_calls:
+            for tc in msg.tool_calls:
+                cid = tc.get("id") or tc.get("call_id")
+                if isinstance(cid, str) and cid:
+                    ids.add(cid)
+    return ids
+
+
 def flush_pending_tool_calls(messages: list[ChatMessage], pending_tool_calls: list[dict[str, Any]], pending_reasoning: str | None) -> None:
     if not pending_tool_calls:
         return
@@ -37,6 +55,7 @@ def flush_pending_tool_calls(messages: list[ChatMessage], pending_tool_calls: li
 def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: list[ChatMessage], tool_context: BridgeToolContext) -> None:
     pending_tool_calls: list[dict[str, Any]] = []
     pending_reasoning: str | None = None
+    skip_call_ids = _existing_call_ids(messages)
 
     for item in iter_input_items(payload):
         if isinstance(item, str):
@@ -73,6 +92,9 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             messages.append(ChatMessage(role="user", content=[image_part]))
             continue
         if item_type == "function_call":
+            call_id = item.get("call_id") or item.get("id") or ""
+            if call_id in skip_call_ids:
+                continue
             pending_tool_calls.append(
                 {
                     "id": item.get("call_id") or item.get("id") or "call_0",
@@ -85,6 +107,9 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             )
             continue
         if item_type == "custom_tool_call":
+            call_id = item.get("call_id") or item.get("id") or ""
+            if call_id in skip_call_ids:
+                continue
             pending_tool_calls.append(
                 {
                     "id": item.get("call_id") or item.get("id") or "call_0",
@@ -109,6 +134,9 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             )
             continue
         if item_type == "function_call_output":
+            call_id = item.get("call_id") or item.get("id") or ""
+            if call_id in skip_call_ids:
+                continue
             flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
             pending_reasoning = None
             messages.append(
@@ -120,6 +148,9 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             )
             continue
         if item_type == "custom_tool_call_output":
+            call_id = item.get("call_id") or item.get("id") or ""
+            if call_id in skip_call_ids:
+                continue
             flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
             pending_reasoning = None
             messages.append(
@@ -131,6 +162,9 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
             )
             continue
         if item_type == "tool_search_output":
+            call_id = item.get("call_id") or item.get("id") or ""
+            if call_id in skip_call_ids:
+                continue
             flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
             pending_reasoning = None
             messages.append(

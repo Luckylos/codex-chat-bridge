@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 import os
 
-from codex_chat_bridge.models import ResponsesRequest
+from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.transform_responses_to_chat import responses_to_chat_request
 
 
@@ -503,6 +503,35 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         })
         request = responses_to_chat_request(payload, "fallback-model")
         self.assertEqual(request.thinking, {"type": "enabled"})
+
+
+class DuplicateCallIdDedupTests(unittest.TestCase):
+    """Existing call_ids in messages are skipped on append."""
+
+    def test_function_call_with_existing_call_id_is_skipped(self) -> None:
+        payload = ResponsesRequest.model_validate({
+            "input": [
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": {"city": "Tokyo"}},
+                {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+                {"type": "function_call", "call_id": "call_1", "name": "get_weather", "arguments": {"city": "Tokyo"}},
+                {"type": "function_call_output", "call_id": "call_1", "output": "sunny"},
+                {"type": "message", "role": "user", "content": "and now?"},
+            ]
+        })
+        # Simulate existing messages that already contain call_1
+        existing = [
+            ChatMessage(role="user", content="first"),
+            ChatMessage(role="assistant", content=None, tool_calls=[{"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]),
+            ChatMessage(role="tool", tool_call_id="call_1", content="sunny"),
+        ]
+        request = responses_to_chat_request(payload, "fallback-model", existing_messages=existing)
+        messages = [m.model_dump(exclude_none=True) for m in request.messages]
+        tool_calls_count = sum(1 for m in messages if m.get("tool_calls"))
+        tool_output_count = sum(1 for m in messages if m.get("role") == "tool" and m.get("tool_call_id") == "call_1")
+        self.assertLessEqual(tool_calls_count, 1, f"tool_calls should be 0 or 1, got={tool_calls_count}")
+        self.assertLessEqual(tool_output_count, 1, f"tool output for call_1 should be 0 or 1, got={tool_output_count}")
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertEqual(messages[-1]["content"], "and now?")
 
 
 if __name__ == "__main__":
