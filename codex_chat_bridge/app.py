@@ -51,3 +51,9 @@ def check_upstream_connectivity() -> bool:
     except Exception as exc:
         _logger.warning("Upstream connectivity check failed: %s", exc)
         return False
+
+
+# 保留稳定导出门面，兼容 systemd / README / uvicorn import target。
+from .api.routes import app
+
+__all__ = ["app", "validate_config", "check_upstream_connectivity"]

@@ -130,11 +130,21 @@ Responses client -> bridge -> Chat Completions upstream
 - `custom_tool_call_input.*`
 - `response.output_item.{added,done}`
 
+### `upstream_transport.py`
+- 纯 HTTP 传输辅助层
+- retryable status / exception、backoff、send_once、response/client cleanup、error body 读取
+
+### `upstream_compat.py`
+- 400 compatibility policy 层
+- generic compat（`top_p` / `stream_options` / `include_usage` / `parallel_tool_calls`）
+- reasoning fallback 与 provider_default 下 raw thinking strip 兜底
+
 ### `upstream.py`
-- 面向单一 NewAPI 上游的 HTTP 传输客户端
-- 调用上游 `/v1/chat/completions`
-- 调用上游 `/v1/models`
-- 处理 headers / timeout / stream
+- `UpstreamClient` 稳定门面与协调层
+- 负责 URL / headers / request lifecycle orchestration
+- 调用 `reasoning_policy.py` 选择首发请求体
+- 调用 `upstream_compat.py` 做 400 compat retry
+- 调用 `upstream_transport.py` 执行实际 HTTP 发送
 
 ### `api/`
 - HTTP 边界子模块目录
@@ -196,6 +206,12 @@ Responses client -> bridge -> Chat Completions upstream
 - 该矩阵的目标是：**transform 层追求 baseline parity，app 层负责本地 UX，upstream 层保留协议/模型最终判断。**
 
 ## 当前实现策略
+
+> 下一轮 reasoning 大重构的冻结方向见：[`docs/reasoning-policy-freeze.md`](docs/reasoning-policy-freeze.md)
+>
+> 当前已完成前两阶段：
+> - **Phase 1**：reasoning 单一真相源重构（canonical effort + provider bucket + request 层去除 legacy 双编码）
+> - **Phase 2**：`upstream.py` 职责拆分为 facade / compat / transport 三层
 
 当前骨架默认选择 **Python + FastAPI + httpx**，原因：
 

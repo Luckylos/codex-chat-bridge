@@ -325,7 +325,7 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         request = responses_to_chat_request(payload, "fallback-model")
         self.assertEqual(request.messages[0].content, "ping")
 
-    def test_reasoning_effort_max_is_not_remapped_to_xhigh(self) -> None:
+    def test_reasoning_effort_max_is_remapped_to_xhigh(self) -> None:
         payload = ResponsesRequest.model_validate(
             {
                 "reasoning": {"effort": "max"},
@@ -334,7 +334,8 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         )
 
         request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.reasoning_effort, "max")
+        self.assertEqual(request.reasoning_effort, "xhigh")
+        self.assertIsNone(request.thinking)
 
     def test_text_format_json_schema_maps_to_chat_response_format(self) -> None:
         payload = ResponsesRequest.model_validate(
@@ -422,87 +423,40 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         self.assertEqual(request.top_logprobs, 3)
         self.assertEqual(request.stream_options, {"include_usage": False})
 
-    def test_reasoning_mode_thinking_only_skips_reasoning_effort(self) -> None:
-        from codex_chat_bridge.config import get_settings, ReasoningMode
-        from codex_chat_bridge.responses_to_chat.request import _apply_reasoning_options
-
+    def test_explicit_reasoning_high_sets_only_canonical_effort(self) -> None:
         payload = ResponsesRequest.model_validate({
             "reasoning": {"effort": "high"},
             "input": "hello",
         })
         request = responses_to_chat_request(payload, "fallback-model")
-        # THINKING_ONLY: thinking.type set, reasoning_effort NOT set
-        self.assertEqual(request.thinking, {"type": "enabled"})
-        self.assertIsNone(request.reasoning_effort)
-
-    def test_reasoning_mode_none_suppresses_all_reasoning(self) -> None:
-        import os
-        os.environ["BRIDGE_REASONING_MODE"] = "none"
-
-        payload = ResponsesRequest.model_validate({
-            "reasoning": {"effort": "high"},
-            "input": "hello",
-        })
-        request = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(request.reasoning_effort, "high")
         self.assertIsNone(request.thinking)
+
+    def test_reasoning_low_is_normalized_to_high(self) -> None:
+        payload = ResponsesRequest.model_validate({
+            "reasoning": {"effort": "low"},
+            "input": "hello",
+        })
+        request = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(request.reasoning_effort, "high")
+        self.assertIsNone(request.thinking)
+
+    def test_reasoning_none_is_preserved_as_none_without_provider_specific_fields(self) -> None:
+        payload = ResponsesRequest.model_validate({
+            "reasoning": {"effort": "none"},
+            "input": "hello",
+        })
+        request = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(request.reasoning_effort, "none")
+        self.assertIsNone(request.thinking)
+
+    def test_missing_reasoning_keeps_request_reasoning_fields_empty(self) -> None:
+        payload = ResponsesRequest.model_validate({
+            "input": "hello",
+        })
+        request = responses_to_chat_request(payload, "fallback-model")
         self.assertIsNone(request.reasoning_effort)
-
-    def test_reasoning_mode_passsthrough_forwards_raw_reasoning(self) -> None:
-        import os
-        os.environ["BRIDGE_REASONING_MODE"] = "passthrough"
-
-        payload = ResponsesRequest.model_validate({
-            "reasoning": {"effort": "high"},
-            "input": "hello",
-        })
-        request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.thinking, {"effort": "high"})
-
-    def test_reasoning_mode_effort_obj_sets_both(self) -> None:
-        import os
-        os.environ["BRIDGE_REASONING_MODE"] = "effort_obj"
-
-        payload = ResponsesRequest.model_validate({
-            "reasoning": {"effort": "high"},
-            "input": "hello",
-        })
-        request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.thinking, {"type": "enabled"})
-        self.assertEqual(request.reasoning_effort, "high")
-
-    def test_reasoning_mode_thinking_sets_both(self) -> None:
-        import os
-        os.environ["BRIDGE_REASONING_MODE"] = "thinking"
-
-        payload = ResponsesRequest.model_validate({
-            "reasoning": {"effort": "high"},
-            "input": "hello",
-        })
-        request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.thinking, {"type": "enabled"})
-        self.assertEqual(request.reasoning_effort, "high")
-
-    def test_reasoning_mode_enable_thinking_sets_only_when_true(self) -> None:
-        import os
-        os.environ["BRIDGE_REASONING_MODE"] = "enable_thinking"
-
-        payload = ResponsesRequest.model_validate({
-            "reasoning": {"effort": "high"},
-            "input": "hello",
-        })
-        request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.thinking, {"type": "enabled"})
-
-    def test_reasoning_mode_split_sets_thinking(self) -> None:
-        import os
-        os.environ["BRIDGE_REASONING_MODE"] = "split"
-
-        payload = ResponsesRequest.model_validate({
-            "reasoning": {"effort": "high"},
-            "input": "hello",
-        })
-        request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.thinking, {"type": "enabled"})
+        self.assertIsNone(request.thinking)
 
 
 class DuplicateCallIdDedupTests(unittest.TestCase):

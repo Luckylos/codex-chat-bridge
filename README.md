@@ -24,6 +24,40 @@ uvicorn codex_chat_bridge.app:app --host 127.0.0.1 --port 18090
 | `BRIDGE_UPSTREAM_TIMEOUT_SECONDS` | 上游超时（默认 60） |
 | `BRIDGE_PUBLIC_BASE_URL` | 对外暴露地址 |
 
+## 当前 reasoning 策略（冻结实现）
+
+bridge 内部将调用方的 reasoning 强度统一为：
+
+- `unspecified`
+- `none`
+- `high`
+- `xhigh`
+
+归一化规则：
+
+- `off` / `disabled` / `false` / `minimal` → `none`
+- `low` / `medium` / `high` → `high`
+- `max` / `xhigh` → `xhigh`
+- 未传 → `unspecified`
+
+然后按模型名选择 provider bucket：
+
+- `openai_like`
+- `deepseek`
+- `glm`
+- `kimi`
+
+bucket 编码规则：
+
+| bucket | `unspecified` | `none/high/xhigh` |
+|:--|:--|:--|
+| `openai_like` | `provider_default` | 仅传 `reasoning_effort` |
+| `deepseek` | `provider_default` | 仅传 `reasoning_effort` |
+| `glm` | `provider_default` | `thinking` + `reasoning_effort`（`none` 时首发 `thinking.disabled`） |
+| `kimi` | `provider_default` | 仍为 `provider_default` |
+
+更完整的冻结设计见：[`docs/reasoning-policy-freeze.md`](docs/reasoning-policy-freeze.md)
+
 ## 暴露的端点
 
 - `GET  /health`

@@ -3,8 +3,9 @@ from __future__ import annotations
 from typing import Any
 
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, build_tool_context_from_request
-from ..config import ReasoningMode, get_settings
+from ..config import get_settings
 from ..models import ChatCompletionsRequest, ChatMessage, ResponsesRequest
+from ..reasoning_policy import normalize_canonical_reasoning_effort
 from .common import (
     BUILT_IN_RESPONSES_TOOLS,
     EXTRA_CHAT_PASSTHROUGH_FIELDS,
@@ -17,119 +18,18 @@ from .errors import UnsupportedResponsesInputItemError
 from .items import append_input_items_as_chat_messages
 
 
-def _reasoning_effort(payload: ResponsesRequest) -> str | None:
-    """Extract normalized reasoning effort string from the Responses request."""
+def _canonical_reasoning_effort(payload: ResponsesRequest) -> str | None:
+    """Normalize caller effort into the frozen bridge canonical values.
+
+    Returns one of: ``none`` / ``high`` / ``xhigh`` / ``None`` (unspecified).
+    """
     if payload.reasoning is None:
         return None
-    effort = payload.reasoning.get("effort")
-    if not isinstance(effort, str):
+
+    canonical_effort = normalize_canonical_reasoning_effort(payload.reasoning.get("effort"))
+    if canonical_effort == "unspecified":
         return None
-    normalized = effort.strip().lower()
-    if normalized in {"none", "off", "disabled"}:
-        return "none"
-    return normalized
-
-
-def _reasoning_enabled(payload: ResponsesRequest) -> bool | None:
-    """Whether reasoning is explicitly enabled (None means not specified)."""
-    effort = _reasoning_effort(payload)
-    if effort is None:
-        return None
-    return effort != "none"
-
-
-# ---- reasoning mode handlers (called via dispatch table) ----
-
-
-def _noop_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """完全禁用推理参数，不发送任何 reasoning/thinking 字段。"""
-    return
-
-
-def _passthrough_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """原样透传 reasoning 字段到 upstream。"""
-    if payload.reasoning is not None:
-        request.thinking = payload.reasoning
-
-
-def _thinking_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """DeepSeek: thinking.type + reasoning_effort"""
-    if enabled is True:
-        request.thinking = {"type": "enabled"}
-    elif enabled is False:
-        request.thinking = {"type": "disabled"}
-    if effort and effort != "none":
-        request.reasoning_effort = effort
-
-
-def _thinking_only_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """GLM/Kimi/MiMo: 仅 thinking.type，不含 reasoning_effort"""
-    if enabled is True:
-        request.thinking = {"type": "enabled"}
-    elif enabled is False:
-        request.thinking = {"type": "disabled"}
-
-
-def _enable_thinking_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """SiliconFlow/Qwen: enable_thinking=true"""
-    if enabled is True:
-        request.thinking = {"type": "enabled"}
-
-
-def _split_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """MiniMax: reasoning_split=true"""
-    if enabled is True:
-        request.thinking = {"type": "enabled"}
-
-
-def _effort_obj_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """OpenRouter: reasoning={effort: ...}"""
-    if effort and effort != "none":
-        request.thinking = {"type": "enabled"}
-        request.reasoning_effort = effort
-
-
-def _effort_reasoning(
-    payload: ResponsesRequest, request: ChatCompletionsRequest, effort: str | None, enabled: bool | None
-) -> None:
-    """OpenAI 标准: reasoning.effort -> reasoning_effort"""
-    if enabled is None:
-        return
-    request.thinking = {"type": "enabled" if enabled else "disabled"}
-    if effort and effort != "none":
-        request.reasoning_effort = effort
-
-
-def _apply_reasoning_options(payload: ResponsesRequest, request: ChatCompletionsRequest) -> None:
-    reasoning_mode = get_settings().reasoning_mode
-    effort = _reasoning_effort(payload)
-    enabled = _reasoning_enabled(payload)
-
-    _dispatcher = {
-        ReasoningMode.NONE: _noop_reasoning,
-        ReasoningMode.PASSTHROUGH: _passthrough_reasoning,
-        ReasoningMode.THINKING: _thinking_reasoning,
-        ReasoningMode.THINKING_ONLY: _thinking_only_reasoning,
-        ReasoningMode.ENABLE_THINKING: _enable_thinking_reasoning,
-        ReasoningMode.SPLIT: _split_reasoning,
-        ReasoningMode.EFFORT_OBJ: _effort_obj_reasoning,
-    }
-    handler = _dispatcher.get(reasoning_mode, _effort_reasoning)
-    handler(payload, request, effort, enabled)
+    return canonical_effort
 
 
 def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any] | None:
@@ -227,5 +127,9 @@ def responses_to_chat_request(
         value = getattr(payload, field, None)
         if value is not None:
             setattr(request, field, value)
-    _apply_reasoning_options(payload, request)
+
+    canonical_effort = _canonical_reasoning_effort(payload)
+    if canonical_effort is not None:
+        request.reasoning_effort = canonical_effort
+
     return request

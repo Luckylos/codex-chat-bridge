@@ -3,39 +3,33 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 import logging
-import random
 from typing import Any
 
 import httpx
 
 from .config import Settings
+from .reasoning_policy import ReasoningRequestState, build_initial_reasoning_state
+from .upstream_compat import UpstreamCompatPolicy
+from .upstream_transport import (
+    backoff_delay,
+    close_response_client,
+    read_error_text,
+    retryable_exception,
+    retryable_status,
+    send_once,
+)
 
 _logger = logging.getLogger("codex-chat-bridge.upstream")
 
-_RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
-
-
-def _retryable_status(status_code: int) -> bool:
-    return status_code in _RETRYABLE_STATUSES
-
-
-def _retryable_exception(exc: Exception) -> bool:
-    """Network-level errors that are safe to retry."""
-    return isinstance(exc, (httpx.TimeoutException, httpx.ConnectError,
-                            httpx.RemoteProtocolError, httpx.ReadError,
-                            httpx.WriteError))
-
-
-def _backoff_delay(attempt: int, base: float = 0.5, max_delay: float = 30.0) -> float:
-    """Exponential backoff with jitter: base * 2^attempt + random(0, base)."""
-    delay = min(base * (2 ** attempt), max_delay)
-    jitter = random.uniform(0, base)
-    return delay + jitter
+# Keep stable module-level names for tests and existing callers.
+_retryable_status = retryable_status
+_backoff_delay = backoff_delay
 
 
 class UpstreamClient:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
+        self._compat_policy = UpstreamCompatPolicy()
 
     def _chat_completions_url(self) -> str:
         if not self._settings.upstream_base_url:
@@ -69,193 +63,135 @@ class UpstreamClient:
             headers["Authorization"] = f"Bearer {self._settings.upstream_api_key}"
         return headers
 
-    # ------------------------------------------------------------------
-    # 400 compatible retry
-    # upstream 返回 400 时按规则逐条尝试兼容修正，每次重试仅应用第一个匹配规则。
-    # 规则按优先级排序；每个规则用 error_body 做二次确认。
-    # ------------------------------------------------------------------
+    async def _send_with_compat_retry(
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        *,
+        is_stream: bool,
+    ) -> tuple[httpx.Response, httpx.AsyncClient | None, ReasoningRequestState]:
+        current_state = build_initial_reasoning_state(body)
 
-    @staticmethod
-    def _top_p_out_of_range(body: dict, error_body: str) -> bool:
-        return body.get("top_p") is not None and body["top_p"] >= 1
+        while True:
+            response, client = await send_once(
+                httpx.AsyncClient,
+                self._settings.upstream_timeout_seconds,
+                url,
+                headers,
+                current_state.body,
+                is_stream=is_stream,
+            )
+            if response.status_code != 400:
+                return response, client, current_state
 
-    @staticmethod
-    def _apply_top_p_clamp(body: dict) -> dict:
-        return {**body, "top_p": 0.999}
+            error_text = await read_error_text(response)
+            compat_retry = self._compat_policy.retry_state(current_state, error_text)
+            await close_response_client(response, client)
+            if compat_retry is None:
+                _logger.warning(
+                    "upstream 400 with no compatible retry: stream=%s model=%s %.200s",
+                    is_stream,
+                    current_state.body.get("model"),
+                    error_text,
+                )
+                return response, None, current_state
 
-    @staticmethod
-    def _stream_options_rejected(body: dict, error_body: str) -> bool:
-        return body.get("stream_options") is not None
+            compat_label, next_state = compat_retry
+            _logger.info(
+                "upstream 400 retry: stream=%s model=%s compat=%s bucket=%s from=%s to=%s effort=%s",
+                is_stream,
+                current_state.body.get("model"),
+                compat_label,
+                current_state.bucket,
+                current_state.wire_mode,
+                next_state.wire_mode,
+                current_state.canonical_effort,
+            )
+            current_state = next_state
 
-    @staticmethod
-    def _apply_strip_stream_options(body: dict) -> dict:
-        return {**body, "stream_options": None}
-
-    @staticmethod
-    def _include_usage_rejected(body: dict, error_body: str) -> bool:
-        opts = body.get("stream_options")
-        return isinstance(opts, dict) and opts.get("include_usage") is True
-
-    @staticmethod
-    def _apply_disable_include_usage(body: dict) -> dict:
-        return {**body, "stream_options": {"include_usage": False}}
-
-    @staticmethod
-    def _parallel_tool_calls_rejected(body: dict, error_body: str) -> bool:
-        return body.get("parallel_tool_calls") is not None
-
-    @staticmethod
-    def _apply_strip_parallel_tool_calls(body: dict) -> dict:
-        return {**body, "parallel_tool_calls": None}
-
-    @staticmethod
-    def _platform_thinking_not_supported(body: dict, error_body: str) -> bool:
-        return body.get("thinking") is not None
-
-    @staticmethod
-    def _apply_strip_thinking(body: dict) -> dict:
-        return {**body, "thinking": None}
-
-    _RETRY_RULES: list[tuple] = [
-        (_top_p_out_of_range, _apply_top_p_clamp),
-        (_include_usage_rejected, _apply_disable_include_usage),
-        (_stream_options_rejected, _apply_strip_stream_options),
-        (_parallel_tool_calls_rejected, _apply_strip_parallel_tool_calls),
-        (_platform_thinking_not_supported, _apply_strip_thinking),
-    ]
-
-    def _retry_body(self, body: dict, error_body: str) -> dict | None:
-        """对 body 应用第一个匹配的兼容规则，返回修正后的 body 或 None（无匹配）。"""
-        for check, apply in self._RETRY_RULES:
-            if check(self, body, error_body):
-                return apply(self, body)
-        return None
-
-    # ------------------------------------------------------------------
-    # Transient retry (429 / 5xx / network errors)
-    # ------------------------------------------------------------------
-
-    async def _post_with_retry(
-        self, url: str, headers: dict, body: dict,
-        *, is_stream: bool = False,
-    ) -> httpx.Response:
-        """POST with retry on 429/5xx/network errors using exponential backoff."""
+    async def _request_with_retry(
+        self,
+        url: str,
+        headers: dict[str, str],
+        body: dict[str, Any],
+        *,
+        is_stream: bool,
+    ) -> tuple[httpx.Response, httpx.AsyncClient | None]:
         max_retries = self._settings.upstream_max_retries
-        last_error: Exception | None = None
+        current_body = dict(body)
 
         for attempt in range(max_retries + 1):
             try:
-                async with httpx.AsyncClient(
-                    timeout=self._settings.upstream_timeout_seconds,
-                ) as client:
-                    if is_stream:
-                        response = await client.send(
-                            client.build_request("POST", url, headers=headers, json=body),
-                        )
-                    else:
-                        response = await client.post(url, headers=headers, json=body)
+                response, client, request_state = await self._send_with_compat_retry(
+                    url,
+                    headers,
+                    current_body,
+                    is_stream=is_stream,
+                )
+                current_body = request_state.body
 
-                if response.status_code == 400:
-                    # Existing 400-compatible retry (one attempt)
-                    error_text = response.text
-                    retried = self._retry_body(body, error_text)
-                    if retried is not None:
-                        _logger.info(
-                            "upstream 400 retry: mode=%s",
-                            [p[0].__name__ for p in self._RETRY_RULES
-                             if p[0](self, body, error_text)],
-                        )
-                        async with httpx.AsyncClient(
-                            timeout=self._settings.upstream_timeout_seconds,
-                        ) as client:
-                            if is_stream:
-                                response = await client.send(
-                                    client.build_request("POST", url, headers=headers, json=retried),
-                                )
-                            else:
-                                response = await client.post(url, headers=headers, json=retried)
-                    else:
-                        _logger.warning("upstream 400 with no compatible retry: %.200s", error_text)
-                    response.raise_for_status()
-                    return response
-
-                if _retryable_status(response.status_code) and attempt < max_retries:
-                    delay = _backoff_delay(attempt)
+                if retryable_status(response.status_code) and attempt < max_retries:
+                    await close_response_client(response, client)
+                    delay = backoff_delay(attempt)
                     _logger.warning(
                         "upstream %d %s (attempt %d/%d) — retry in %.1fs",
-                        response.status_code, "stream" if is_stream else "body",
-                        attempt + 1, max_retries + 1, delay,
+                        response.status_code,
+                        "stream" if is_stream else "body",
+                        attempt + 1,
+                        max_retries + 1,
+                        delay,
                     )
                     await asyncio.sleep(delay)
                     continue
 
                 response.raise_for_status()
-                return response
+                return response, client
 
-            except (httpx.TimeoutException, httpx.ConnectError,
-                    httpx.RemoteProtocolError, httpx.ReadError,
-                    httpx.WriteError) as exc:
-                last_error = exc
-                if attempt < max_retries:
-                    delay = _backoff_delay(attempt)
+            except Exception as exc:
+                if retryable_exception(exc) and attempt < max_retries:
+                    delay = backoff_delay(attempt)
                     _logger.warning(
-                        "upstream network error %r (attempt %d/%d) — retry in %.1fs",
-                        exc, attempt + 1, max_retries + 1, delay,
+                        "upstream %s network error %r (attempt %d/%d) — retry in %.1fs",
+                        "stream" if is_stream else "body",
+                        exc,
+                        attempt + 1,
+                        max_retries + 1,
+                        delay,
                     )
                     await asyncio.sleep(delay)
                     continue
                 raise
-        # NB: bare raise after loop is unreachable — final attempt either returns
-        # (via response.raise_for_status()) or raises inside the except handler.
 
+        raise RuntimeError("retry loop exhausted unexpectedly")
 
     async def create_chat_completion(self, payload: Any) -> dict[str, Any]:
         body = payload.model_dump(mode="json", exclude_none=True)
-        url = self._chat_completions_url()
-        headers = self._headers()
-
-        response = await self._post_with_retry(url, headers, body)
+        response, _client = await self._request_with_retry(
+            self._chat_completions_url(),
+            self._headers(),
+            body,
+            is_stream=False,
+        )
         return response.json()
 
     async def stream_chat_completion(self, payload: Any) -> AsyncIterator[bytes]:
         body = payload.model_dump(mode="json", exclude_none=True)
-        url = self._chat_completions_url()
-        headers = self._headers()
+        response, client = await self._request_with_retry(
+            self._chat_completions_url(),
+            self._headers(),
+            body,
+            is_stream=True,
+        )
+        if client is None:
+            raise RuntimeError("stream response missing client handle")
 
-        max_retries = self._settings.upstream_max_retries
-        for attempt in range(max_retries + 1):
-            try:
-                async with httpx.AsyncClient(
-                    timeout=self._settings.upstream_timeout_seconds,
-                ) as client:
-                    async with client.stream(
-                        "POST", url, headers=headers, json=body,
-                    ) as response:
-                        if _retryable_status(response.status_code) and attempt < max_retries:
-                            delay = _backoff_delay(attempt)
-                            _logger.warning(
-                                "upstream %d stream (attempt %d/%d) — retry in %.1fs",
-                                response.status_code, attempt + 1, max_retries + 1, delay,
-                            )
-                            await asyncio.sleep(delay)
-                            continue
-                        response.raise_for_status()
-                        async for chunk in response.aiter_bytes():
-                            if chunk:
-                                yield chunk
-                        return
-            except (httpx.TimeoutException, httpx.ConnectError,
-                    httpx.RemoteProtocolError, httpx.ReadError,
-                    httpx.WriteError) as exc:
-                if attempt < max_retries:
-                    delay = _backoff_delay(attempt)
-                    _logger.warning(
-                        "upstream stream network error %r (attempt %d/%d) — retry in %.1fs",
-                        exc, attempt + 1, max_retries + 1, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
-                raise
+        try:
+            async for chunk in response.aiter_bytes():
+                if chunk:
+                    yield chunk
+        finally:
+            await close_response_client(response, client)
 
     async def list_models(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=self._settings.upstream_timeout_seconds) as client:

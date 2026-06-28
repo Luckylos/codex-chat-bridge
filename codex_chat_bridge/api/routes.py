@@ -8,7 +8,6 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response as StarletteResponse
 
-from ..app import validate_config
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
@@ -44,6 +43,7 @@ async def _bridge_lifespan(_app: FastAPI):
         _access_logger.setLevel(logging.INFO)
 
     try:
+        from ..app import validate_config
         validate_config()
     except RuntimeError as exc:
         _logger.error("Startup config validation failed: %s", exc)
