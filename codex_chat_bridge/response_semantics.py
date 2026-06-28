@@ -22,12 +22,20 @@ def canonicalize_tool_arguments(arguments: object) -> str:
 def map_chat_usage(usage: dict | None) -> dict:
     if not usage:
         return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
-    input_tokens = usage.get("input_tokens", usage.get("prompt_tokens", 0))
-    output_tokens = usage.get("output_tokens", usage.get("completion_tokens", 0))
-    total_tokens = usage.get("total_tokens", input_tokens + output_tokens)
+    # Some gateways (NewAPI) return both old (prompt_tokens) and new
+    # (input_tokens) fields where the new fields are zero-filled.
+    # When both exist, take the larger value as the real count.
+    prompt_tokens = usage.get("prompt_tokens", 0) or 0
+    completion_tokens = usage.get("completion_tokens", 0) or 0
+    input_tokens = usage.get("input_tokens", 0) or 0
+    output_tokens = usage.get("output_tokens", 0) or 0
+    # Prefer the non-zero value when both fields are present
+    resolved_input = max(input_tokens, prompt_tokens)
+    resolved_output = max(output_tokens, completion_tokens)
+    total_tokens = usage.get("total_tokens", resolved_input + resolved_output)
     result = {
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
+        "input_tokens": resolved_input,
+        "output_tokens": resolved_output,
         "total_tokens": total_tokens,
     }
     if "completion_tokens_details" in usage:
