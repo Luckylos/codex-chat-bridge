@@ -30,9 +30,9 @@ class ReasoningFallbackStep:
 
 
 _BUCKET_RULES: tuple[tuple[re.Pattern[str], ReasoningProviderBucket], ...] = (
-    (re.compile(r"^deepseek", re.IGNORECASE), "deepseek"),
-    (re.compile(r"^(glm|zhipu|bigmodel)", re.IGNORECASE), "glm"),
-    (re.compile(r"^(kimi|moonshot)", re.IGNORECASE), "kimi"),
+    (re.compile(r"(?:^|[/\-])(deepseek)", re.IGNORECASE), "deepseek"),
+    (re.compile(r"(?:^|[/\-])(glm|zhipu|bigmodel)", re.IGNORECASE), "glm"),
+    (re.compile(r"(?:^|[/\-])(kimi|moonshot)", re.IGNORECASE), "kimi"),
 )
 
 _DEFAULT_BUCKET: ReasoningProviderBucket = "openai_like"

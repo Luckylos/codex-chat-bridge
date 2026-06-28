@@ -27,6 +27,17 @@ class ReasoningPolicyTests(unittest.TestCase):
         self.assertEqual(select_reasoning_provider_bucket("kimi-k2"), "kimi")
         self.assertEqual(select_reasoning_provider_bucket("gpt-5"), "openai_like")
 
+    def test_select_reasoning_provider_bucket_with_relay_prefix(self) -> None:
+        # NewAPI channel prefix formats: "channel-model" or "provider/model"
+        self.assertEqual(select_reasoning_provider_bucket("z-ai/glm-5.1"), "glm")
+        self.assertEqual(select_reasoning_provider_bucket("evomap-glm-5.1"), "glm")
+        self.assertEqual(select_reasoning_provider_bucket("deepseek-ai/deepseek-v4-flash"), "deepseek")
+        self.assertEqual(select_reasoning_provider_bucket("moonshotai/kimi-k2.6"), "kimi")
+        self.assertEqual(select_reasoning_provider_bucket("evomap-kimi-k2.6"), "kimi")
+        # Relay-prefixed openai_like models stay openai_like
+        self.assertEqual(select_reasoning_provider_bucket("openai/gpt-oss-120b"), "openai_like")
+        self.assertEqual(select_reasoning_provider_bucket("evomap-claude-opus"), "openai_like")
+
     def test_infer_canonical_reasoning_effort_prefers_reasoning_effort_field(self) -> None:
         self.assertEqual(infer_canonical_reasoning_effort({"reasoning_effort": "medium"}), "high")
         self.assertEqual(infer_canonical_reasoning_effort({"reasoning_effort": "max"}), "xhigh")
