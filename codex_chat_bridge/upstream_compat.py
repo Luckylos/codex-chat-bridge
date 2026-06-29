@@ -71,7 +71,6 @@ class UpstreamCompatPolicy:
                 retried_body = apply(state.body)
                 return label, ReasoningRequestState(
                     body=retried_body,
-                    bucket=state.bucket,
                     canonical_effort=state.canonical_effort,
                     wire_mode=state.wire_mode,
                 )
@@ -91,7 +90,6 @@ class UpstreamCompatPolicy:
         retried_body = _rewrite_fields(state.body, thinking=None)
         return "unsupported_thinking_strip_raw_thinking", ReasoningRequestState(
             body=retried_body,
-            bucket=state.bucket,
             canonical_effort=state.canonical_effort,
             wire_mode="provider_default",
         )

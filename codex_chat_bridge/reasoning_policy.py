@@ -5,20 +5,17 @@ import re
 from typing import Any, Literal
 
 CanonicalReasoningEffort = Literal["unspecified", "none", "high", "xhigh"]
-ReasoningProviderBucket = Literal["openai_like", "deepseek", "glm", "kimi"]
-ReasoningWireMode = Literal[
-    "provider_default",
-    "effort_only",
-    "glm_disabled",
-    "glm_enabled_with_effort",
-    "glm_enabled_only",
-]
+ReasoningWireMode = Literal["provider_default", "effort_only"]
+
+# Internal discriminator: effort-passing buckets use effort_only; kimi uses
+# provider_default (no reasoning parameters).  The bucket is derived from
+# model name and never leaves this module.
+_Bucket = Literal["effort", "passthrough"]
 
 
 @dataclass(frozen=True, slots=True)
 class ReasoningRequestState:
     body: dict[str, Any]
-    bucket: ReasoningProviderBucket
     canonical_effort: CanonicalReasoningEffort
     wire_mode: ReasoningWireMode
 
@@ -29,13 +26,18 @@ class ReasoningFallbackStep:
     wire_mode: ReasoningWireMode
 
 
-_BUCKET_RULES: tuple[tuple[re.Pattern[str], ReasoningProviderBucket], ...] = (
-    (re.compile(r"(?:^|[/\-])(deepseek)", re.IGNORECASE), "deepseek"),
-    (re.compile(r"(?:^|[/\-])(glm|zhipu|bigmodel)", re.IGNORECASE), "glm"),
-    (re.compile(r"(?:^|[/\-])(kimi|moonshot)", re.IGNORECASE), "kimi"),
+# Model-name patterns → internal bucket.
+# "effort"  = accept reasoning_effort (openai_like, deepseek, glm)
+# "passthrough" = preserve provider defaults, send no reasoning params (kimi)
+_BUCKET_RULES: tuple[tuple[re.Pattern[str], _Bucket], ...] = (
+    (re.compile(r"(?:^|[/\-])(kimi|moonshot)", re.IGNORECASE), "passthrough"),
+    # The remaining effort-passing families — order does not matter since
+    # they all map to the same bucket.
+    (re.compile(r"(?:^|[/\-])(deepseek)", re.IGNORECASE), "effort"),
+    (re.compile(r"(?:^|[/\-])(glm|zhipu|bigmodel)", re.IGNORECASE), "effort"),
 )
 
-_DEFAULT_BUCKET: ReasoningProviderBucket = "openai_like"
+_DEFAULT_BUCKET: _Bucket = "effort"
 
 
 def normalize_canonical_reasoning_effort(value: Any) -> CanonicalReasoningEffort:
@@ -54,7 +56,7 @@ def normalize_canonical_reasoning_effort(value: Any) -> CanonicalReasoningEffort
     return "high"
 
 
-def select_reasoning_provider_bucket(model: str | None) -> ReasoningProviderBucket:
+def _select_bucket(model: str | None) -> _Bucket:
     normalized_model = (model or "").strip()
     for pattern, bucket in _BUCKET_RULES:
         if pattern.search(normalized_model):
@@ -78,30 +80,23 @@ def infer_canonical_reasoning_effort(body: dict[str, Any]) -> CanonicalReasoning
     return "unspecified"
 
 
-def _select_initial_wire_mode(
-    bucket: ReasoningProviderBucket,
+def _select_wire_mode(
+    bucket: _Bucket,
     canonical_effort: CanonicalReasoningEffort,
 ) -> ReasoningWireMode:
     if canonical_effort == "unspecified":
         return "provider_default"
 
-    if bucket in {"openai_like", "deepseek"}:
+    if bucket == "effort":
         return "effort_only"
 
-    # GLM via NVIDIA NIM / standard OpenAI-compatible gateways accepts
-    # reasoning_effort but rejects the thinking parameter — same as
-    # openai_like / deepseek.  Use effort_only to avoid a mandatory
-    # 400 → compat-retry round-trip on every request with explicit effort.
-    if bucket == "glm":
-        return "effort_only"
-
+    # passthrough: preserve provider defaults regardless of explicit effort
     return "provider_default"
 
 
 def _encode_for_mode(
     body: dict[str, Any],
     *,
-    bucket: ReasoningProviderBucket,
     canonical_effort: CanonicalReasoningEffort,
     wire_mode: ReasoningWireMode,
 ) -> dict[str, Any]:
@@ -111,24 +106,6 @@ def _encode_for_mode(
         return encoded
 
     if wire_mode == "effort_only":
-        if canonical_effort == "unspecified":
-            return encoded
-        encoded["reasoning_effort"] = canonical_effort
-        return encoded
-
-    if bucket != "glm":
-        raise ValueError(f"wire_mode={wire_mode!r} is only valid for glm bucket")
-
-    if wire_mode == "glm_disabled":
-        encoded["thinking"] = {"type": "disabled"}
-        return encoded
-
-    if wire_mode == "glm_enabled_only":
-        encoded["thinking"] = {"type": "enabled"}
-        return encoded
-
-    if wire_mode == "glm_enabled_with_effort":
-        encoded["thinking"] = {"type": "enabled"}
         if canonical_effort != "unspecified":
             encoded["reasoning_effort"] = canonical_effort
         return encoded
@@ -136,20 +113,50 @@ def _encode_for_mode(
     raise ValueError(f"Unknown reasoning wire mode: {wire_mode}")
 
 
+# Public API wrappers preserving existing call signatures.
+
+_FROZEN_BUCKET_MAP: dict[str, str] = {
+    "effort": "openai_like",  # default effort bucket name
+}
+_PASSTHROUGH_NAMES: list[str] = ["kimi"]
+_EFFORT_NAMES: list[str] = ["deepseek", "glm", "openai_like"]
+
+
+def select_reasoning_provider_bucket(model: str | None) -> str:
+    """Public: returns the legacy bucket name for backward compatibility.
+
+    Mapping: kimi → "kimi", deepseek → "deepseek", glm → "glm",
+    everything else → "openai_like".
+    """
+    normalized_model = (model or "").strip()
+    # First check passthrough (kimi)
+    for pattern, _ in _BUCKET_RULES:
+        if pattern.search(normalized_model):
+            # Find the matching pattern group to determine legacy name
+            m = pattern.search(normalized_model)
+            if m:
+                matched = m.group(1).lower()
+                if matched in {"kimi", "moonshot"}:
+                    return "kimi"
+                if matched in {"deepseek"}:
+                    return "deepseek"
+                if matched in {"glm", "zhipu", "bigmodel"}:
+                    return "glm"
+    return "openai_like"
+
+
 def build_initial_reasoning_state(body: dict[str, Any]) -> ReasoningRequestState:
     body_copy = dict(body)
-    bucket = select_reasoning_provider_bucket(str(body_copy.get("model") or ""))
+    bucket = _select_bucket(str(body_copy.get("model") or ""))
     canonical_effort = infer_canonical_reasoning_effort(body_copy)
-    wire_mode = _select_initial_wire_mode(bucket, canonical_effort)
+    wire_mode = _select_wire_mode(bucket, canonical_effort)
     encoded_body = _encode_for_mode(
         body_copy,
-        bucket=bucket,
         canonical_effort=canonical_effort,
         wire_mode=wire_mode,
     )
     return ReasoningRequestState(
         body=encoded_body,
-        bucket=bucket,
         canonical_effort=canonical_effort,
         wire_mode=wire_mode,
     )
@@ -163,51 +170,18 @@ def build_reasoning_fallback_step(
     state: ReasoningRequestState,
     error_text: str,
 ) -> ReasoningFallbackStep | None:
-    thinking_rejected = _error_mentions(error_text, "thinking")
     effort_rejected = _error_mentions(error_text, "reasoning_effort")
 
-    if not thinking_rejected and not effort_rejected:
+    if not effort_rejected:
         return None
 
     if state.wire_mode == "provider_default":
         return None
 
-    # effort_only is now used by openai_like, deepseek, AND glm.
-    # If reasoning_effort is rejected, fall back to provider_default.
     if state.wire_mode == "effort_only":
         if effort_rejected:
             return ReasoningFallbackStep(
                 label="unsupported_reasoning_effort_to_provider_default",
-                wire_mode="provider_default",
-            )
-        return None
-
-    # Legacy GLM-specific wire_modes (glm_enabled_with_effort,
-    # glm_enabled_only, glm_disabled) — kept for backward compatibility
-    # and synthetic state coverage; the initial selection no longer
-    # produces these, but the fallback logic still defends against
-    # them if they ever appear via external state injection.
-    if state.bucket == "glm":
-        if state.wire_mode == "glm_enabled_with_effort":
-            if thinking_rejected and effort_rejected:
-                return ReasoningFallbackStep(
-                    label="unsupported_glm_reasoning_fields_to_provider_default",
-                    wire_mode="provider_default",
-                )
-            if effort_rejected:
-                return ReasoningFallbackStep(
-                    label="unsupported_reasoning_effort_to_glm_enabled_only",
-                    wire_mode="glm_enabled_only",
-                )
-            if thinking_rejected:
-                return ReasoningFallbackStep(
-                    label="unsupported_thinking_to_provider_default",
-                    wire_mode="provider_default",
-                )
-
-        if state.wire_mode in {"glm_enabled_only", "glm_disabled"} and thinking_rejected:
-            return ReasoningFallbackStep(
-                label="unsupported_thinking_to_provider_default",
                 wire_mode="provider_default",
             )
 
@@ -224,13 +198,11 @@ def build_reasoning_fallback_state(
 
     encoded_body = _encode_for_mode(
         state.body,
-        bucket=state.bucket,
         canonical_effort=state.canonical_effort,
         wire_mode=fallback_step.wire_mode,
     )
     return fallback_step.label, ReasoningRequestState(
         body=encoded_body,
-        bucket=state.bucket,
         canonical_effort=state.canonical_effort,
         wire_mode=fallback_step.wire_mode,
     )

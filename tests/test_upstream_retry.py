@@ -155,7 +155,8 @@ class UpstreamCompatRetryTests(unittest.TestCase):
         self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
         self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
 
-    def test_non_streaming_glm_effort_rejection_falls_back_to_thinking_only(self) -> None:
+    def test_non_streaming_glm_effort_rejection_falls_back_to_provider_default(self) -> None:
+        # GLM now uses effort_only — same path as openai_like/deepseek.
         FakeAsyncClient.response_queue = [
             FakeResponse(400, text="Unsupported parameter(s): reasoning_effort"),
             FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
@@ -164,24 +165,22 @@ class UpstreamCompatRetryTests(unittest.TestCase):
             result = asyncio.run(self.client.create_chat_completion(self._payload("glm-5.2", "high")))
 
         self.assertEqual(result["id"], "ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["thinking"], {"type": "enabled"})
         self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertEqual(FakeAsyncClient.captured_requests[1]["thinking"], {"type": "enabled"})
+        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
+        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
         self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
 
-    def test_non_streaming_glm_thinking_rejection_falls_back_to_provider_default(self) -> None:
+    def test_non_streaming_glm_no_thinking_in_initial_request(self) -> None:
+        # GLM never sends thinking — only reasoning_effort.
         FakeAsyncClient.response_queue = [
-            FakeResponse(400, text="Unsupported parameter(s): thinking"),
             FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
         ]
         with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
             result = asyncio.run(self.client.create_chat_completion(self._payload("glm-5.2", "high")))
 
         self.assertEqual(result["id"], "ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["thinking"], {"type": "enabled"})
         self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
-        self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
+        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
 
     def test_streaming_openai_like_effort_rejection_falls_back_to_provider_default(self) -> None:
         FakeAsyncClient.response_queue = [
@@ -204,7 +203,8 @@ class UpstreamCompatRetryTests(unittest.TestCase):
         self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
         self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
 
-    def test_streaming_glm_none_uses_thinking_disabled(self) -> None:
+    def test_streaming_glm_none_uses_effort_only(self) -> None:
+        # GLM with effort=none now sends reasoning_effort=none, not thinking.
         FakeAsyncClient.response_queue = [
             FakeResponse(200, chunks=[b"ok"]),
         ]
@@ -219,8 +219,8 @@ class UpstreamCompatRetryTests(unittest.TestCase):
             body = asyncio.run(collect())
 
         self.assertEqual(body, b"ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["thinking"], {"type": "disabled"})
-        self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[0])
+        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "none")
+        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
 
     def test_streaming_keeps_non_reasoning_compat_rules(self) -> None:
         FakeAsyncClient.response_queue = [
@@ -245,8 +245,9 @@ class UpstreamCompatRetryTests(unittest.TestCase):
 
         self.assertEqual(body, b"ok")
         self.assertTrue(FakeAsyncClient.captured_requests[0]["parallel_tool_calls"])
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["thinking"], {"type": "enabled"})
+        # GLM uses effort_only — reasoning_effort without thinking
         self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
         self.assertNotIn("parallel_tool_calls", FakeAsyncClient.captured_requests[1])
-        self.assertEqual(FakeAsyncClient.captured_requests[1]["thinking"], {"type": "enabled"})
         self.assertEqual(FakeAsyncClient.captured_requests[1]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])

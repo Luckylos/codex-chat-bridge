@@ -99,11 +99,10 @@ class UpstreamClient:
 
             compat_label, next_state = compat_retry
             _logger.info(
-                "upstream 400 retry: stream=%s model=%s compat=%s bucket=%s from=%s to=%s effort=%s",
+                "upstream 400 retry: stream=%s model=%s compat=%s from=%s to=%s effort=%s",
                 is_stream,
                 current_state.body.get("model"),
                 compat_label,
-                current_state.bucket,
                 current_state.wire_mode,
                 next_state.wire_mode,
                 current_state.canonical_effort,
