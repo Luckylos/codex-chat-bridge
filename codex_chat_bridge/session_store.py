@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import time
 from typing import Any
 
@@ -14,7 +15,11 @@ from .models import ChatMessage, ResponsesRequest
 
 
 class SessionRecord:
-    """一次 Responses 响应的状态快照。"""
+    """一次 Responses 响应的状态快照。
+
+    messages 和 tool_context 在构造时做深拷贝，确保后续
+    请求对同一 response_id 的修改不会变异已持久化的历史。
+    """
 
     __slots__ = ("messages", "tool_context", "model", "created_at")
 
@@ -25,8 +30,9 @@ class SessionRecord:
         model: str,
         created_at: float | None = None,
     ) -> None:
-        self.messages = messages
-        self.tool_context = tool_context
+        # Deep-copy to isolate from caller mutations
+        self.messages: list[ChatMessage] = copy.deepcopy(messages)
+        self.tool_context: BridgeToolContext = copy.deepcopy(tool_context)
         self.model = model
         self.created_at = created_at or time.time()
 
@@ -117,12 +123,43 @@ def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
     )
 
 
+def _merge_tool_contexts(
+    existing: BridgeToolContext,
+    payload: ResponsesRequest,
+) -> BridgeToolContext:
+    """Merge tools from a new request into an existing session's tool context.
+
+    Preserves all tools from the previous session; adds new tools from
+    the current request that aren't already registered.
+    """
+    new_context = build_tool_context_from_request(payload)
+    # Add tools from the new request that aren't already in the session
+    for chat_tool in new_context.chat_tools:
+        fn_name = chat_tool.get("function", {}).get("name", "")
+        if fn_name and fn_name not in existing._seen_chat_names:
+            spec = new_context.chat_name_to_spec.get(fn_name)
+            if spec is not None:
+                existing.add_chat_tool(fn_name, spec, chat_tool)
+    # Propagate tool_search flag if the new request enables it
+    if new_context.tool_search_enabled and not existing.tool_search_enabled:
+        existing.add_tool_search_tool()
+    # Propagate custom tool names
+    for name in new_context.custom_tool_names - existing.custom_tool_names:
+        existing.custom_tool_names.add(name)
+        if name not in existing.chat_name_to_spec:
+            spec = new_context.chat_name_to_spec.get(name)
+            if spec is not None:
+                existing.chat_name_to_spec[name] = spec
+    return existing
+
+
 def resolve_session(
     payload: ResponsesRequest,
 ) -> tuple[list[ChatMessage] | None, BridgeToolContext | None, str | None]:
     """解析 previous_response_id，返回 (existing_messages, tool_context, model) 或 (None, None, None)。
 
-    返回的 messages 是会话已保存的完整历史。调用方应在其基础上追加新的 input items。
+    返回的 messages 是会话已保存的完整历史（深拷贝，可安全修改）。
+    tool_context 已合并新请求的 tools。
     """
     prev_id = getattr(payload, "previous_response_id", None)
     if not prev_id:
@@ -133,7 +170,10 @@ def resolve_session(
     if record is None:
         return None, None, None
 
-    return record.messages, record.tool_context, record.model
+    # Merge new request tools into the session's tool context
+    merged_context = _merge_tool_contexts(record.tool_context, payload)
+
+    return record.messages, merged_context, record.model
 
 
 def save_session(
@@ -143,7 +183,11 @@ def save_session(
     model: str,
     assistant_message: ChatMessage | None = None,
 ) -> None:
-    """保存会话快照。提供 assistant_message 时将其追加到 messages 后再持久化。"""
+    """保存会话快照。提供 assistant_message 时将其追加到 messages 后再持久化。
+
+    SessionRecord 构造时会深拷贝 messages 和 tool_context，
+    所以此处可以安全地先修改再传入。
+    """
     saved_messages = [*messages, assistant_message] if assistant_message is not None else messages
     store = get_session_store()
     store.save(response_id, SessionRecord(saved_messages, tool_context, model))

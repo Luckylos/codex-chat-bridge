@@ -128,9 +128,11 @@ async def _create_response_core(payload: ResponsesRequest):
             # 使用会话中的 model 作为 fallback
             if not resolved_model and session_model:
                 resolved_model = session_model
-            tool_context = session_context or build_tool_context_from_request(payload)
+            tool_context = session_context  # already merged with new request tools
         else:
             tool_context = build_tool_context_from_request(payload)
+
+        assert tool_context is not None  # always set by one of the two branches
 
         chat_request = responses_to_chat_request(
             payload, resolved_model, tool_context,

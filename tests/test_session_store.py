@@ -117,3 +117,60 @@ class SessionStoreTests(unittest.TestCase):
         assert record is not None
         self.assertEqual(record.messages[0].content, "saved")
         self.assertEqual(record.model, "saved-model")
+
+
+class SessionImmutabilityTests(unittest.TestCase):
+    """Verify that session records are isolated from caller mutations."""
+
+    def test_messages_deep_copy_on_save(self) -> None:
+        """Modifying the original messages list after save does not
+        affect the persisted session."""
+        messages = [ChatMessage(role="user", content="original")]
+        save_session("resp_imm1", messages, BridgeToolContext(), "m")
+        # Mutate the original
+        messages.append(ChatMessage(role="user", content="mutated"))
+        record = get_session_store().get("resp_imm1")
+        assert record is not None
+        self.assertEqual(len(record.messages), 1)
+        self.assertEqual(record.messages[0].content, "original")
+
+    def test_tool_context_deep_copy_on_save(self) -> None:
+        """Modifying the original tool_context after save does not
+        affect the persisted session."""
+        ctx = BridgeToolContext()
+        save_session("resp_imm2", [], ctx, "m")
+        # Mutate the original
+        ctx.tool_search_enabled = True
+        record = get_session_store().get("resp_imm2")
+        assert record is not None
+        self.assertFalse(record.tool_context.tool_search_enabled)
+
+
+class SessionToolMergeTests(unittest.TestCase):
+    """Verify that resolve_session merges new request tools into session context."""
+
+    def test_new_tool_added_to_session_context(self) -> None:
+        store = get_session_store()
+        # Store a session with one tool
+        ctx = BridgeToolContext()
+        ctx.add_function_tool({"type": "function", "function": {"name": "old_tool", "parameters": {}}})
+        store.save("resp_merge1", SessionRecord(
+            messages=[ChatMessage(role="user", content="hi")],
+            tool_context=ctx,
+            model="m",
+        ))
+        # Resolve with a new request that adds another tool
+        payload = ResponsesRequest.model_validate({
+            "model": "m",
+            "previous_response_id": "resp_merge1",
+            "input": "continue",
+            "tools": [{"type": "function", "function": {"name": "new_tool", "parameters": {}}}],
+        })
+        msgs, merged_ctx, model = resolve_session(payload)
+        assert merged_ctx is not None
+        # Both old and new tools should be present
+        self.assertTrue(merged_ctx.tool_search_enabled is False)
+        old_spec = merged_ctx.lookup_chat_name("old_tool")
+        new_spec = merged_ctx.lookup_chat_name("new_tool")
+        self.assertIsNotNone(old_spec)
+        self.assertIsNotNone(new_spec)

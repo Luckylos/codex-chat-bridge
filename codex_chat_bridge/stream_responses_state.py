@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .bridge_context import BridgeToolContext
 from .sse_utils import sse_event
 from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore
@@ -72,17 +74,33 @@ class ResponsesStreamState:
         return sse_event("response.failed", {"type": "response.failed", "response": response})
 
     def build_assistant_message(self) -> ChatMessage | None:
-        """从流状态构建 assistant ChatMessage，用于 session 持久化。"""
+        """从流状态构建 assistant ChatMessage，用于 session 持久化。
+
+        Preserves full structured content (text + refusal parts) so that
+        previous_response_id continuations see the complete history.
+        """
         from .models import ChatMessage
 
-        content: str | None = self.message.text or None
         tool_call_states = {k: v for k, v in self.tools.tool_calls.items() if v.name}
 
-        if not content and not tool_call_states:
+        # Build content from finalized parts — includes both text and refusal
+        has_parts = bool(self.message.parts)
+        has_unstructured_text = bool(self.message.text) and not has_parts
+
+        if not has_parts and not has_unstructured_text and not tool_call_states:
             if self.reasoning.text:
-                content = ""
+                # reasoning-only response: no visible content, keep empty content
+                pass
             else:
                 return None
+
+        # If parts are present (stream was finalized), use structured content
+        if has_parts:
+            content: str | list[dict[str, Any]] | None = list(self.message.parts)
+        elif has_unstructured_text:
+            content = self.message.text or None
+        else:
+            content = None
 
         chat_tool_calls = None
         if tool_call_states:
