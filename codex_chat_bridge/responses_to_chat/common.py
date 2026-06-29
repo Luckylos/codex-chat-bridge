@@ -13,7 +13,7 @@ from .content_helpers import (
     reasoning_item_text,
     normalize_tool_output_content,
 )
-from .image_security import (
+from .media_security import (
     is_safe_image_url,
     chat_image_part_from_input_item,
     chat_audio_part_from_input_item,

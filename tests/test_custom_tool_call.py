@@ -6,9 +6,9 @@ import unittest
 
 from codex_chat_bridge.models import ResponsesRequest
 from codex_chat_bridge.stream_chat_to_responses import create_responses_sse_stream_from_chat_stream
-from codex_chat_bridge.tool_context import build_tool_context_from_request
-from codex_chat_bridge.transform_chat_to_responses import chat_text_to_responses
-from codex_chat_bridge.transform_responses_to_chat import responses_to_chat_request
+from codex_chat_bridge.bridge_context import build_tool_context_from_request
+from codex_chat_bridge.chat_to_responses import chat_text_to_responses
+from codex_chat_bridge.responses_to_chat import responses_to_chat_request
 
 
 class CustomToolCallTests(unittest.TestCase):

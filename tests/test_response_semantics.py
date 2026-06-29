@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from codex_chat_bridge.transform_chat_to_responses import chat_text_to_responses
+from codex_chat_bridge.chat_to_responses import chat_text_to_responses
 
 
 class ResponseSemanticsTests(unittest.TestCase):

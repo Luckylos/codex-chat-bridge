@@ -19,7 +19,7 @@ from ..stream_chat_to_responses import (
     create_responses_sse_from_chat_response,
     create_responses_sse_stream_from_chat_stream,
 )
-from ..transform_responses_to_chat import UnsupportedResponsesInputItemError, responses_to_chat_request
+from ..responses_to_chat import UnsupportedResponsesInputItemError, responses_to_chat_request
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
 from .errors import build_error_response, invalid_request_error

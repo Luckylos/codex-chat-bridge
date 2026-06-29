@@ -4,7 +4,7 @@ import unittest
 import os
 
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
-from codex_chat_bridge.transform_responses_to_chat import responses_to_chat_request
+from codex_chat_bridge.responses_to_chat import responses_to_chat_request
 
 
 class MultiTurnToolRoundTripTests(unittest.TestCase):
