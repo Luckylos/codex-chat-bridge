@@ -88,10 +88,12 @@ def _select_initial_wire_mode(
     if bucket in {"openai_like", "deepseek"}:
         return "effort_only"
 
+    # GLM via NVIDIA NIM / standard OpenAI-compatible gateways accepts
+    # reasoning_effort but rejects the thinking parameter — same as
+    # openai_like / deepseek.  Use effort_only to avoid a mandatory
+    # 400 → compat-retry round-trip on every request with explicit effort.
     if bucket == "glm":
-        if canonical_effort == "none":
-            return "glm_disabled"
-        return "glm_enabled_with_effort"
+        return "effort_only"
 
     return "provider_default"
 
@@ -170,7 +172,9 @@ def build_reasoning_fallback_step(
     if state.wire_mode == "provider_default":
         return None
 
-    if state.bucket in {"openai_like", "deepseek"}:
+    # effort_only is now used by openai_like, deepseek, AND glm.
+    # If reasoning_effort is rejected, fall back to provider_default.
+    if state.wire_mode == "effort_only":
         if effort_rejected:
             return ReasoningFallbackStep(
                 label="unsupported_reasoning_effort_to_provider_default",
@@ -178,6 +182,11 @@ def build_reasoning_fallback_step(
             )
         return None
 
+    # Legacy GLM-specific wire_modes (glm_enabled_with_effort,
+    # glm_enabled_only, glm_disabled) — kept for backward compatibility
+    # and synthetic state coverage; the initial selection no longer
+    # produces these, but the fallback logic still defends against
+    # them if they ever appear via external state injection.
     if state.bucket == "glm":
         if state.wire_mode == "glm_enabled_with_effort":
             if thinking_rejected and effort_rejected:

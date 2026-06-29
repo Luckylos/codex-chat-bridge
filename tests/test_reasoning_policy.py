@@ -65,25 +65,27 @@ class ReasoningPolicyTests(unittest.TestCase):
         self.assertNotIn("thinking", state.body)
         self.assertNotIn("reasoning_effort", state.body)
 
-    def test_build_initial_reasoning_state_glm_high_uses_thinking_plus_effort(self) -> None:
+    def test_build_initial_reasoning_state_glm_high_uses_effort_only(self) -> None:
+        # GLM via NVIDIA NIM / standard OpenAI-compatible gateways accepts
+        # reasoning_effort but rejects thinking — same wire_mode as openai_like.
         state = build_initial_reasoning_state({
             "model": "glm-5.2",
             "reasoning_effort": "high",
         })
         self.assertEqual(state.bucket, "glm")
         self.assertEqual(state.canonical_effort, "high")
-        self.assertEqual(state.wire_mode, "glm_enabled_with_effort")
-        self.assertEqual(state.body["thinking"], {"type": "enabled"})
+        self.assertEqual(state.wire_mode, "effort_only")
         self.assertEqual(state.body["reasoning_effort"], "high")
+        self.assertNotIn("thinking", state.body)
 
-    def test_build_initial_reasoning_state_glm_none_disables_thinking(self) -> None:
+    def test_build_initial_reasoning_state_glm_none_uses_effort_only(self) -> None:
         state = build_initial_reasoning_state({
             "model": "glm-5.2",
             "reasoning_effort": "none",
         })
-        self.assertEqual(state.wire_mode, "glm_disabled")
-        self.assertEqual(state.body["thinking"], {"type": "disabled"})
-        self.assertNotIn("reasoning_effort", state.body)
+        self.assertEqual(state.wire_mode, "effort_only")
+        self.assertEqual(state.body["reasoning_effort"], "none")
+        self.assertNotIn("thinking", state.body)
 
     def test_build_initial_reasoning_state_kimi_ignores_explicit_effort_and_preserves_default(self) -> None:
         state = build_initial_reasoning_state({
@@ -96,7 +98,9 @@ class ReasoningPolicyTests(unittest.TestCase):
         self.assertNotIn("thinking", state.body)
         self.assertNotIn("reasoning_effort", state.body)
 
-    def test_glm_effort_rejection_falls_back_to_thinking_only(self) -> None:
+    def test_glm_effort_only_rejection_falls_back_to_provider_default(self) -> None:
+        # GLM now uses effort_only just like openai_like/deepseek.
+        # If the upstream rejects reasoning_effort, fall back to provider_default.
         initial_state = build_initial_reasoning_state({
             "model": "glm-5.2",
             "reasoning_effort": "high",
@@ -104,16 +108,28 @@ class ReasoningPolicyTests(unittest.TestCase):
         retry = build_reasoning_fallback_state(initial_state, "Unsupported parameter(s): reasoning_effort")
         assert retry is not None
         label, retry_state = retry
-        self.assertEqual(label, "unsupported_reasoning_effort_to_glm_enabled_only")
-        self.assertEqual(retry_state.wire_mode, "glm_enabled_only")
-        self.assertEqual(retry_state.body["thinking"], {"type": "enabled"})
+        self.assertEqual(label, "unsupported_reasoning_effort_to_provider_default")
+        self.assertEqual(retry_state.wire_mode, "provider_default")
+        self.assertNotIn("thinking", retry_state.body)
         self.assertNotIn("reasoning_effort", retry_state.body)
 
     def test_glm_thinking_rejection_falls_back_to_provider_default(self) -> None:
-        initial_state = build_initial_reasoning_state({
-            "model": "glm-5.2",
-            "reasoning_effort": "high",
-        })
+        # Construct a synthetic glm_enabled_with_effort state to verify the
+        # fallback path still works even though the initial selection no
+        # longer produces this wire_mode for GLM.
+        from codex_chat_bridge.reasoning_policy import ReasoningRequestState, _encode_for_mode
+        body = _encode_for_mode(
+            {"model": "glm-5.2", "reasoning_effort": "high"},
+            bucket="glm",
+            canonical_effort="high",
+            wire_mode="glm_enabled_with_effort",
+        )
+        initial_state = ReasoningRequestState(
+            body=body,
+            bucket="glm",
+            canonical_effort="high",
+            wire_mode="glm_enabled_with_effort",
+        )
         retry = build_reasoning_fallback_state(initial_state, "Unsupported parameter(s): thinking")
         assert retry is not None
         label, retry_state = retry
