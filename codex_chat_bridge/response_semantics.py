@@ -1,22 +1,13 @@
+"""Shared response semantics: status mapping, usage mapping, and incomplete details.
+
+Tool argument canonicalization has been moved to tool_arguments.py;
+this module re-exports it for backward compatibility.
+"""
 from __future__ import annotations
 
-import json
 from typing import Any
 
-
-def canonicalize_tool_arguments(arguments: object) -> str:
-    if arguments is None:
-        return "{}"
-    if isinstance(arguments, str):
-        raw = arguments.strip()
-        if not raw:
-            return "{}"
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return arguments
-        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-    return json.dumps(arguments, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+from .tool_arguments import canonicalize_tool_arguments  # re-export for backward compat
 
 
 def map_chat_usage(usage: dict | None) -> dict:

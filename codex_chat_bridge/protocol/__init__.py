@@ -1,9 +1,9 @@
-"""SSE utilities — re-export facade.
+"""Protocol subpackage — SSE serialization, protocol types, and session storage.
 
-The real implementation now lives in protocol/sse.py.
-This module re-exports all symbols for backward compatibility.
+Groups the protocol-layer concerns together: how the bridge speaks SSE,
+how it models request/response data, and how it tracks sessions.
 """
-from .protocol.sse import (
+from .sse import (
     extract_block,
     parse_sse_block,
     parse_sse_json_block,
