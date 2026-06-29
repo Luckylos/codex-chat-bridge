@@ -105,9 +105,7 @@ async def _create_response_core(payload: ResponsesRequest):
             payload, resolved_model, tool_context,
             existing_messages=existing_messages,
         )
-        policy_error = validate_effective_messages(chat_request)
-        if policy_error is not None:
-            return policy_error
+        validate_effective_messages(chat_request)
 
         # ---- Bridge response_id for session indexing ----
         bridge_id = f"resp_bridge_{uuid.uuid4().hex[:12]}"

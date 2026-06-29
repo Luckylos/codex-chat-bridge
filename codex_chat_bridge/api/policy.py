@@ -1,9 +1,9 @@
+"""Effective-input UX guard — validates that the normalized request
+still carries meaningful content before forwarding to upstream."""
 from __future__ import annotations
 
-from fastapi.responses import JSONResponse
-
+from ..errors import InvalidRequestError
 from ..models import ChatCompletionsRequest, ChatMessage
-from .errors import invalid_request_error
 
 
 def message_has_semantic_content(message: ChatMessage) -> bool:
@@ -31,15 +31,18 @@ def message_has_semantic_content(message: ChatMessage) -> bool:
     return False
 
 
-def validate_effective_messages(chat_request: ChatCompletionsRequest) -> JSONResponse | None:
+def validate_effective_messages(chat_request: ChatCompletionsRequest) -> None:
+    """Raise InvalidRequestError if the request has no semantically meaningful content.
+
+    This prevents obviously-empty requests from reaching upstream.
+    """
     if not chat_request.messages:
-        return invalid_request_error(
+        raise InvalidRequestError(
             "No supported Responses input items remained after bridge normalization.",
-            "empty_effective_input",
+            code="empty_effective_input",
         )
     if not any(message_has_semantic_content(message) for message in chat_request.messages):
-        return invalid_request_error(
+        raise InvalidRequestError(
             "Responses input normalized to only blank or semantically empty messages.",
-            "blank_effective_input",
+            code="blank_effective_input",
         )
-    return None
