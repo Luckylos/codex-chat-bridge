@@ -1,5 +1,1 @@
-"""codex-chat-bridge package."""
-
-__all__ = [
-    "config",
-]
+"""codex-chat-bridge — Responses API ↔ Chat Completions protocol bridge."""
