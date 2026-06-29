@@ -118,3 +118,14 @@ class ResponsesResponse(BaseModel):
     created_at: int | None = None
     usage: dict[str, Any] | None = None
     incomplete_details: dict[str, Any] | None = None
+    # Request-echo fields (part of OpenAI Responses response object spec)
+    instructions: Any | None = None
+    max_output_tokens: int | None = None
+    parallel_tool_calls: bool | None = None
+    previous_response_id: str | None = None
+    reasoning: dict[str, Any] | None = None
+    temperature: float | None = None
+    tool_choice: Any = None
+    tools: list[dict[str, Any]] | None = None
+    top_p: float | None = None
+    metadata: dict[str, Any] | None = None

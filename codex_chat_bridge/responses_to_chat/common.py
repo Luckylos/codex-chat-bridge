@@ -16,6 +16,7 @@ from .content_helpers import (
 from .image_security import (
     is_safe_image_url,
     chat_image_part_from_input_item,
+    chat_audio_part_from_input_item,
 )
 from .message_normalization import (
     _sanitize_chat_messages,
@@ -101,6 +102,15 @@ def chat_message_content_from_response_content(content: Any) -> str | list[dict[
                 continue
             has_non_text = True
             parts.append(image_part)
+            continue
+        if item_type == "input_audio":
+            # Responses input_audio → Chat input_audio part (with SSRF safety check)
+            try:
+                audio_part = chat_audio_part_from_input_item(item)
+            except UnsupportedResponsesInputItemError:
+                continue
+            has_non_text = True
+            parts.append(audio_part)
             continue
         continue
     if not parts:

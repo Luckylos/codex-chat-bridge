@@ -46,4 +46,25 @@ def map_chat_usage(usage: dict | None) -> dict:
 
 
 def response_status_from_finish_reason(finish_reason: str | None) -> str:
-    return "incomplete" if finish_reason == "length" else "completed"
+    """Map Chat Completions finish_reason to Responses status.
+
+    OpenAI Responses API semantics:
+    - ``tool_calls``: the model wants to invoke tools → ``in_progress``
+    - ``length``: output truncated → ``incomplete``
+    - ``content_filter``: safety filter → ``incomplete``
+    - anything else → ``completed``
+    """
+    if finish_reason == "tool_calls":
+        return "in_progress"
+    if finish_reason in ("length", "content_filter"):
+        return "incomplete"
+    return "completed"
+
+
+def incomplete_reason_from_finish_reason(finish_reason: str | None) -> dict | None:
+    """Return ``incomplete_details`` dict when finish_reason warrants it."""
+    if finish_reason == "length":
+        return {"reason": "max_output_tokens"}
+    if finish_reason == "content_filter":
+        return {"reason": "content_filter"}
+    return None

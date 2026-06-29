@@ -7,6 +7,13 @@ from ..sse_utils import sse_event
 
 
 class ResponseEnvelopeState:
+    # Request-echo fields written into the final response per OpenAI spec
+    _REQUEST_ECHO_KEYS = (
+        "instructions", "max_output_tokens", "parallel_tool_calls",
+        "previous_response_id", "reasoning", "temperature",
+        "tool_choice", "tools", "top_p", "metadata",
+    )
+
     def __init__(self, response_id: str | None = None) -> None:
         self.response_started = False
         self.completed = False
@@ -17,6 +24,7 @@ class ResponseEnvelopeState:
         self.finish_reason: str | None = None
         self.next_output_index = 0
         self.completed_items: list[tuple[int, dict]] = []
+        self._request_echo: dict | None = None
 
     @property
     def message_item_id(self) -> str:
@@ -26,13 +34,26 @@ class ResponseEnvelopeState:
     def reasoning_item_id(self) -> str:
         return f"rs_{self.response_id}"
 
+    def set_request_echo(self, original_request: dict | None) -> None:
+        """Store the original Responses request for echo-back in finalize."""
+        self._request_echo = original_request
+
+    def _apply_request_echo(self, response: dict) -> None:
+        """Write request-echo fields into the response dict."""
+        if not self._request_echo:
+            return
+        for key in self._REQUEST_ECHO_KEYS:
+            value = self._request_echo.get(key)
+            if value is not None:
+                response[key] = value
+
     def allocate_output_index(self) -> int:
         idx = self.next_output_index
         self.next_output_index += 1
         return idx
 
     def base_response(self, status: str, output: list[dict]) -> dict:
-        return {
+        response = {
             "id": self.response_id,
             "object": "response",
             "created_at": self.created_at,
@@ -41,6 +62,8 @@ class ResponseEnvelopeState:
             "output": output,
             "usage": self.usage or {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         }
+        self._apply_request_echo(response)
+        return response
 
     def ensure_started(self) -> list[bytes]:
         if self.response_started:

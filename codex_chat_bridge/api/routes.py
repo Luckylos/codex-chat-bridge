@@ -112,6 +112,9 @@ async def _create_response_core(payload: ResponsesRequest):
         # ---- Bridge response_id for session indexing ----
         bridge_id = f"resp_bridge_{uuid.uuid4().hex[:12]}"
 
+        # ---- Build original request dict for echo-back in response ----
+        original_request = payload.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
+
         client = UpstreamClient(settings)
 
         # ---- Streaming paths ----
@@ -119,14 +122,19 @@ async def _create_response_core(payload: ResponsesRequest):
             if settings.upstream_streaming:
                 return await _stream_upstream_streaming(
                     client, chat_request, tool_context, bridge_id,
+                    original_request=original_request,
                 )
             return await _stream_buffer_then_sse(
                 client, chat_request, tool_context, bridge_id,
+                original_request=original_request,
             )
 
         # ---- Non-streaming path ----
         chat_body = await client.create_chat_completion(chat_request)
-        response_body = chat_text_to_responses(chat_body, chat_request.model, tool_context)
+        response_body = chat_text_to_responses(
+            chat_body, chat_request.model, tool_context,
+            original_request=original_request,
+        )
         _assistant = _assistant_message_from_chat_body(chat_body)
         raw = response_body.model_dump(mode="json")
         raw["id"] = bridge_id
@@ -147,6 +155,7 @@ async def _stream_upstream_streaming(
     chat_request,
     tool_context: BridgeToolContext,
     bridge_id: str,
+    original_request: dict | None = None,
 ) -> StreamingResponse:
     """Stream: upstream supports streaming → passthrough SSE with session save."""
     captured: list = []
@@ -154,6 +163,7 @@ async def _stream_upstream_streaming(
         client.stream_chat_completion(chat_request),
         tool_context,
         response_id=bridge_id,
+        original_request=original_request,
         _captured_state=captured,
     )
 
@@ -175,11 +185,13 @@ async def _stream_buffer_then_sse(
     chat_request,
     tool_context: BridgeToolContext,
     bridge_id: str,
+    original_request: dict | None = None,
 ) -> StreamingResponse:
     """Stream: upstream doesn't stream → buffer chat_body, wrap as SSE, save session."""
     chat_body = await client.create_chat_completion(chat_request)
     raw_stream = create_responses_sse_from_chat_response(
         chat_body, tool_context, response_id=bridge_id,
+        original_request=original_request,
     )
     _assistant = _assistant_message_from_chat_body(chat_body)
 

@@ -233,19 +233,29 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
             {
                 "input": [
                     {
+                        "type": "function_call",
+                        "call_id": "call_4",
+                        "name": "weather",
+                        "arguments": "{}",
+                    },
+                    {
                         "type": "function_call_output",
                         "call_id": "call_4",
                         "output": [
                             {"type": "output_text", "text": "sunny"},
                             {"type": "output_text", "text": "23C"},
                         ],
-                    }
+                    },
                 ]
             }
         )
 
         request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.messages[0].content, "sunny\n23C")
+        # With matching function_call, output becomes tool message with flattened text
+        tool_msgs = [m for m in request.messages if m.role == "tool"]
+        self.assertEqual(len(tool_msgs), 1)
+        self.assertEqual(tool_msgs[0].tool_call_id, "call_4")
+        self.assertEqual(tool_msgs[0].content, "sunny\n23C")
 
     def test_plain_string_input_becomes_user_message(self) -> None:
         payload = ResponsesRequest.model_validate({"input": "hello"})
@@ -300,11 +310,13 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
             ],
         )
 
-    def test_unsupported_top_level_item_is_ignored_like_cc_switch(self) -> None:
+    def test_input_audio_top_level_item_produces_user_message(self) -> None:
         payload = ResponsesRequest.model_validate({"input": [{"type": "input_audio", "audio_url": "https://example.com/a.mp3"}]})
 
         request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.messages, [])
+        self.assertEqual(len(request.messages), 1)
+        self.assertEqual(request.messages[0].role, "user")
+        self.assertIsInstance(request.messages[0].content, list)
 
     def test_unknown_message_content_parts_are_ignored_while_text_survives(self) -> None:
         payload = ResponsesRequest.model_validate(
@@ -323,7 +335,11 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         )
 
         request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.messages[0].content, "ping")
+        # input_audio is now supported, content is a structured list
+        self.assertIsInstance(request.messages[0].content, list)
+        text_parts = [p for p in request.messages[0].content if isinstance(p, dict) and p.get("type") == "text"]
+        self.assertEqual(len(text_parts), 1)
+        self.assertEqual(text_parts[0]["text"], "ping")
 
     def test_reasoning_effort_max_is_remapped_to_xhigh(self) -> None:
         payload = ResponsesRequest.model_validate(

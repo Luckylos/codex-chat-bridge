@@ -10,6 +10,7 @@ from .common import (
     backfill_tool_call_reasoning_content,
     canonical_json_string,
     chat_image_part_from_input_item,
+    chat_audio_part_from_input_item,
     chat_message_content_from_response_content,
     ensure_tool_call_reasoning_content,
     normalize_message_tool_calls,
@@ -105,7 +106,7 @@ def append_input_items_as_chat_messages(
             continue
 
         # ---- Text content items → user message ----
-        if item_type in {"input_text", "output_text", "text"}:
+        if item_type in {"input_text", "output_text", "text", "latest_reminder"}:
             text = item.get("text", "") if isinstance(item.get("text"), str) else ""
             _flush()
             messages.append(ChatMessage(role="user", content=text.strip()))
@@ -119,6 +120,16 @@ def append_input_items_as_chat_messages(
             except UnsupportedResponsesInputItemError:
                 continue
             messages.append(ChatMessage(role="user", content=[image_part]))
+            continue
+
+        # ---- Audio items → user message with input_audio part ----
+        if item_type == "input_audio":
+            _flush()
+            try:
+                audio_part = chat_audio_part_from_input_item(item)
+            except UnsupportedResponsesInputItemError:
+                continue
+            messages.append(ChatMessage(role="user", content=[audio_part]))
             continue
 
         # ---- Tool call items → accumulate into pending_tool_calls ----
@@ -166,6 +177,7 @@ def append_input_items_as_chat_messages(
 
         # ---- Tool output items → tool message ----
         if item_type in {"function_call_output", "custom_tool_call_output", "tool_search_output"}:
+            call_id = _extract_call_id(item)
             if _should_skip(item, skip_call_ids):
                 continue
             _flush()
@@ -173,13 +185,33 @@ def append_input_items_as_chat_messages(
                 tool_content = normalize_tool_output_content(item.get("output"))
             else:
                 tool_content = canonical_json_string(item)
-            messages.append(
-                ChatMessage(
-                    role="tool",
-                    tool_call_id=_extract_call_id(item),
-                    content=tool_content,
+            # Check if this tool output has a matching tool call in the pending buffer
+            # or has already been flushed. If not, it's an orphan — downgrade to user
+            # message to avoid Chat Completions rejecting a tool message without a
+            # preceding assistant message with tool_calls.
+            has_matching_call = (
+                any(tc.get("id") == call_id or tc.get("call_id") == call_id for tc in pending_tool_calls)
+                or any(
+                    msg.role == "assistant" and any(tc.get("id") == call_id for tc in (msg.tool_calls or []))
+                    for msg in messages
                 )
             )
+            if has_matching_call:
+                messages.append(
+                    ChatMessage(
+                        role="tool",
+                        tool_call_id=call_id,
+                        content=tool_content,
+                    )
+                )
+            else:
+                # Orphan tool output: wrap as user message so upstream doesn't reject
+                messages.append(
+                    ChatMessage(
+                        role="user",
+                        content=f"Function call output ({call_id}): {tool_content}",
+                    )
+                )
             continue
 
         # ---- Generic message items (role/content dicts) ----

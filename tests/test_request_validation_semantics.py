@@ -269,7 +269,7 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 json={
                     "model": "deepseek-v4-flash",
                     "input": [
-                        {"type": "input_audio", "audio_url": "https://example.com/a.mp3"}
+                        {"type": "input_image", "image_url": "file:///etc/passwd"}  # unsafe URL → rejected
                     ]
                 },
             )
@@ -362,10 +362,10 @@ class RequestValidationSemanticsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["output_text"], "ok")
-        self.assertEqual(
-            captured_messages[0],
-            [{"role": "user", "content": "ping"}],
-        )
+        # input_audio is now supported, so content is a structured list
+        self.assertEqual(len(captured_messages[0]), 1)
+        self.assertEqual(captured_messages[0][0]["role"], "user")
+        self.assertIsInstance(captured_messages[0][0]["content"], list)
 
     def test_instructions_only_context_is_still_allowed_to_reach_upstream(self) -> None:
         captured_messages = []

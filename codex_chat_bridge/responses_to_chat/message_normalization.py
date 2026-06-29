@@ -37,7 +37,9 @@ def _sanitize_chat_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
     if not messages:
         return messages
 
-    # Step 1: Remove empty — only filter completely blank assistant/tool messages
+    # Step 1: Normalize — assistant messages with no content and no tool_calls
+    # must exist as separators in multi-turn tool loops (tool_call→tool_output requires
+    # an intervening assistant message).  Fill with content="" instead of removing.
     sanitized: list[ChatMessage] = []
     for msg in messages:
         has_content = msg.content is not None and msg.content != "" and not (
@@ -45,6 +47,11 @@ def _sanitize_chat_messages(messages: list[ChatMessage]) -> list[ChatMessage]:
         )
         has_tool_calls = bool(msg.tool_calls)
         has_tool_call_id = bool(msg.tool_call_id)
+        if msg.role == "assistant" and not has_content and not has_tool_calls and not has_tool_call_id:
+            # Keep the assistant message but ensure it has empty-string content
+            # so the Chat Completions message sequence stays valid.
+            sanitized.append(ChatMessage(role="assistant", content=""))
+            continue
         # Keep user/system even if content is empty (upstream may need context placeholder)
         if msg.role in ("user", "system"):
             sanitized.append(msg)

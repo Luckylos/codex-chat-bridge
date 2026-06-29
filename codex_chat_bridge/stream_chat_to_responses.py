@@ -22,6 +22,7 @@ async def create_responses_sse_stream_from_chat_stream(
     upstream_stream: AsyncIterator[bytes],
     tool_context: BridgeToolContext | None = None,
     response_id: str | None = None,
+    original_request: dict | None = None,
     _captured_state: list | None = None,
 ) -> AsyncIterator[bytes]:
     """Wrap a Chat Completions SSE stream into Responses SSE events.
@@ -31,6 +32,7 @@ async def create_responses_sse_stream_from_chat_stream(
     """
     buffer = ""
     state = ResponsesStreamState(tool_context, response_id=response_id)
+    state.envelope.set_request_echo(original_request)
     try:
         async for chunk in upstream_stream:
             buffer += chunk.decode("utf-8", errors="ignore")
@@ -89,21 +91,42 @@ def _process_chat_chunk(
         reasoning_text = state.active_reasoning_text_for_tools()
         if reasoning_text:
             events.extend(state.finalize_reasoning_if_open())
+        # If inline think is still in detecting/reasoning phase, flush it
+        if state._inline_think_phase != state._PHASE_TEXT:
+            events.extend(state.finalize_reasoning_if_open())
+            # Emit any buffered content as text (not think)
+            if state._inline_think_buffer:
+                events.extend(state.push_text_delta(state._inline_think_buffer))
+                state._inline_think_buffer = ""
+            state._inline_think_phase = state._PHASE_TEXT
         for tool_call in tool_calls:
             if isinstance(tool_call, dict):
                 events.extend(state.push_tool_call_delta(tool_call, reasoning_text or None))
 
     content = delta.get("content")
     if isinstance(content, str) and content:
-        events.extend(state.finalize_reasoning_if_open())
-        events.extend(state.push_text_delta(content))
+        # If explicit reasoning field was already used, finalize it and
+        # skip inline think detection — content is ordinary text
+        if reasoning_delta:
+            events.extend(state.finalize_reasoning_if_open())
+            events.extend(state.push_text_delta(content))
+        else:
+            events.extend(state.push_content_delta(content))
     elif isinstance(content, list):
         events.extend(state.finalize_reasoning_if_open())
+        # Flush any pending inline think buffer as text
+        if state._inline_think_phase != state._PHASE_TEXT:
+            if state._inline_think_buffer:
+                events.extend(state.push_text_delta(state._inline_think_buffer))
+                state._inline_think_buffer = ""
+            state._inline_think_phase = state._PHASE_TEXT
         for part in content:
             if not isinstance(part, dict):
                 continue
             part_type = part.get("type")
             if part_type in {"text", "output_text"} and isinstance(part.get("text"), str) and part.get("text"):
+                # Forward annotations from structured content parts
+                state.message.add_annotations(part.get("annotations"))
                 events.extend(state.push_text_delta(part["text"]))
             elif part_type == "refusal" and isinstance(part.get("refusal"), str) and part.get("refusal"):
                 events.extend(state.push_refusal_part(part["refusal"]))
@@ -148,9 +171,11 @@ async def create_responses_sse_from_chat_response(
     chat_body: dict,
     tool_context: BridgeToolContext | None = None,
     response_id: str | None = None,
+    original_request: dict | None = None,
 ) -> AsyncIterator[bytes]:
     """Wrap a non-streaming Chat Completions response into Responses SSE events."""
     state = ResponsesStreamState(tool_context, response_id=response_id)
+    state.envelope.set_request_echo(original_request)
     state.apply_chunk_metadata(chat_body)
 
     choices = chat_body.get("choices") or []

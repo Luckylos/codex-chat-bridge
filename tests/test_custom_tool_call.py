@@ -50,18 +50,25 @@ class CustomToolCallTests(unittest.TestCase):
             {
                 "input": [
                     {
+                        "type": "custom_tool_call",
+                        "call_id": "call_patch",
+                        "name": "apply_patch",
+                        "input": "patch content",
+                    },
+                    {
                         "type": "custom_tool_call_output",
                         "call_id": "call_patch",
                         "output": "ok",
                         "metadata": {"exit_code": 0},
-                    }
+                    },
                 ]
             }
         )
 
         request = responses_to_chat_request(payload, "fallback-model")
-        message = request.messages[0].model_dump(exclude_none=True)
-
+        tool_msgs = [m for m in request.messages if m.role == "tool"]
+        self.assertEqual(len(tool_msgs), 1)
+        message = tool_msgs[0].model_dump(exclude_none=True)
         self.assertEqual(message["role"], "tool")
         self.assertEqual(message["tool_call_id"], "call_patch")
         self.assertEqual(

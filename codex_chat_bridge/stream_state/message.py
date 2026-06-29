@@ -12,6 +12,12 @@ class MessageState:
         self.parts: list[dict] = []
         self.text_content_index: int | None = None
         self.text_part_done = False
+        self._annotations: list[dict] = []
+
+    def add_annotations(self, annotations: list[dict] | None) -> None:
+        """Accumulate annotations from streaming content parts."""
+        if isinstance(annotations, list):
+            self._annotations.extend(a for a in annotations if isinstance(a, dict))
 
     def _ensure_message_item_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if self.item_added:
@@ -114,7 +120,7 @@ class MessageState:
         events: list[bytes] = []
         if self.text_content_index is not None and not self.text_part_done:
             self.text_part_done = True
-            text_part = {"type": "output_text", "text": self.text, "annotations": []}
+            text_part = {"type": "output_text", "text": self.text, "annotations": list(self._annotations)}
             self.parts[self.text_content_index] = text_part
             events.append(
                 sse_event(
