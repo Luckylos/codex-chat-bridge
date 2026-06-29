@@ -21,7 +21,8 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
 
     async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        start = time.monotonic()
+        start_mono = time.monotonic()
+        start_wall = time.time()
         method = request.method
         path = request.url.path
         error: str | None = None
@@ -37,13 +38,13 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             requests_in_flight.dec()
-            duration_ms = round((time.monotonic() - start) * 1000)
+            duration_ms = round((time.monotonic() - start_mono) * 1000)
             request_duration_ms.labels(method=method, path=path).observe(duration_ms)
             requests_total.labels(method=method, path=path, status=str(status)).inc()
 
             # Access log (stdout JSONL)
             record = {
-                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start)),
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_wall)),
                 "method": method,
                 "path": path,
                 "status": status,

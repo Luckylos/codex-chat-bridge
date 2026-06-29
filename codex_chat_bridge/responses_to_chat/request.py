@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, build_tool_context_from_request
-from ..config import get_settings
 from ..models import ChatCompletionsRequest, ChatMessage, ResponsesRequest
 from ..reasoning_policy import normalize_canonical_reasoning_effort
 from .common import (
@@ -30,40 +29,6 @@ def _canonical_reasoning_effort(payload: ResponsesRequest) -> str | None:
     if canonical_effort == "unspecified":
         return None
     return canonical_effort
-
-
-def _responses_tool_to_chat_tool(tool: dict[str, Any]) -> dict[str, Any] | None:
-    tool_type = tool.get("type")
-    if tool_type == "tool_search":
-        return {
-            "type": "function",
-            "function": {
-                "name": TOOL_SEARCH_PROXY_NAME,
-                "description": "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for tools or connectors to load.",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of tool groups to return.",
-                        },
-                    },
-                    "required": ["query"],
-                },
-            },
-        }
-    # 检查是否为无法转换的内置工具
-    if tool_type in BUILT_IN_RESPONSES_TOOLS:
-        policy = get_settings().unsupported_tool_policy
-        if policy == "error":
-            raise UnsupportedResponsesInputItemError(tool_type, tool)
-        # policy == "ignore" 静默跳过
-        return None
-    return None
 
 
 def _responses_tool_choice_to_chat(tool_choice: Any, tool_context: BridgeToolContext) -> Any:

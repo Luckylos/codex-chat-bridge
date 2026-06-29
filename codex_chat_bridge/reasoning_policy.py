@@ -115,13 +115,6 @@ def _encode_for_mode(
 
 # Public API wrappers preserving existing call signatures.
 
-_FROZEN_BUCKET_MAP: dict[str, str] = {
-    "effort": "openai_like",  # default effort bucket name
-}
-_PASSTHROUGH_NAMES: list[str] = ["kimi"]
-_EFFORT_NAMES: list[str] = ["deepseek", "glm", "openai_like"]
-
-
 def select_reasoning_provider_bucket(model: str | None) -> str:
     """Public: returns the legacy bucket name for backward compatibility.
 
