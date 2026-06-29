@@ -92,13 +92,7 @@ def _process_chat_chunk(
         if reasoning_text:
             events.extend(state.finalize_reasoning_if_open())
         # If inline think is still in detecting/reasoning phase, flush it
-        if state._inline_think_phase != state._PHASE_TEXT:
-            events.extend(state.finalize_reasoning_if_open())
-            # Emit any buffered content as text (not think)
-            if state._inline_think_buffer:
-                events.extend(state.push_text_delta(state._inline_think_buffer))
-                state._inline_think_buffer = ""
-            state._inline_think_phase = state._PHASE_TEXT
+        events.extend(state.inline_think.force_to_text(state))
         for tool_call in tool_calls:
             if isinstance(tool_call, dict):
                 events.extend(state.push_tool_call_delta(tool_call, reasoning_text or None))
@@ -115,11 +109,7 @@ def _process_chat_chunk(
     elif isinstance(content, list):
         events.extend(state.finalize_reasoning_if_open())
         # Flush any pending inline think buffer as text
-        if state._inline_think_phase != state._PHASE_TEXT:
-            if state._inline_think_buffer:
-                events.extend(state.push_text_delta(state._inline_think_buffer))
-                state._inline_think_buffer = ""
-            state._inline_think_phase = state._PHASE_TEXT
+        events.extend(state.inline_think.force_to_text(state))
         for part in content:
             if not isinstance(part, dict):
                 continue

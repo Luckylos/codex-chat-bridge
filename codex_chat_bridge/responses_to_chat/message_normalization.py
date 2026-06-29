@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..models import ChatMessage
-from .content_helpers import flatten_text_content
+from .content import flatten_text_content
 
 
 def _messages_are_mergeable(a: ChatMessage, b: ChatMessage) -> bool:

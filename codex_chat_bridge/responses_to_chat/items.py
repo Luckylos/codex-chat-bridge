@@ -19,6 +19,7 @@ from .common import (
     iter_input_items,
 )
 from .errors import UnsupportedResponsesInputItemError
+from .orphan import has_matching_call
 
 
 def _existing_call_ids(messages: list[ChatMessage]) -> set[str]:
@@ -189,14 +190,7 @@ def append_input_items_as_chat_messages(
             # or has already been flushed. If not, it's an orphan — downgrade to user
             # message to avoid Chat Completions rejecting a tool message without a
             # preceding assistant message with tool_calls.
-            has_matching_call = (
-                any(tc.get("id") == call_id or tc.get("call_id") == call_id for tc in pending_tool_calls)
-                or any(
-                    msg.role == "assistant" and any(tc.get("id") == call_id for tc in (msg.tool_calls or []))
-                    for msg in messages
-                )
-            )
-            if has_matching_call:
+            if has_matching_call(call_id, pending_tool_calls, messages):
                 messages.append(
                     ChatMessage(
                         role="tool",

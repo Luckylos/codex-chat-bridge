@@ -3,25 +3,20 @@ from __future__ import annotations
 from typing import Any
 
 from .bridge_context import BridgeToolContext
+from .inline_think_sm import InlineThinkStateMachine
+from .models import ChatMessage
 from .sse_utils import sse_event
 from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore
 
 
 class ResponsesStreamState:
-    # Inline-think detection phases: models like kimi/GLM embed  in content
-    _PHASE_DETECTING = "detecting"
-    _PHASE_REASONING = "reasoning"
-    _PHASE_TEXT = "text"
-
     def __init__(self, tool_context: BridgeToolContext | None = None, response_id: str | None = None) -> None:
         resolved_context = tool_context or BridgeToolContext()
         self.envelope = ResponseEnvelopeState(response_id=response_id)
         self.reasoning = ReasoningState()
         self.message = MessageState()
         self.tools = ToolStateStore(resolved_context)
-        # Inline think detection state
-        self._inline_think_phase: str = self._PHASE_DETECTING
-        self._inline_think_buffer: str = ""
+        self.inline_think = InlineThinkStateMachine()
 
     def apply_chunk_metadata(self, payload: dict) -> None:
         self.envelope.apply_metadata(payload)
@@ -45,67 +40,13 @@ class ResponsesStreamState:
         return self.message.push_text_delta(self.envelope, delta)
 
     def push_content_delta(self, delta: str) -> list[bytes]:
-        """Route a content delta through inline-think detection.
+        """Route a content delta through the inline-think state machine.
 
-        If the delta starts with (or continues) a  block, route
-        reasoning content to the reasoning state machine; once the
-        think block closes, switch to normal text emission.
+        Delegates to InlineThinkStateMachine for three-phase detection,
+        which calls back into this state's push_reasoning_delta /
+        push_text_delta / finalize_reasoning_if_open as needed.
         """
-        import re as _re
-        from .chat_to_responses.inline_think import could_be_partial_think_open
-
-        if self._inline_think_phase == self._PHASE_TEXT:
-            # Already past the think block — emit as plain text
-            return self.push_text_delta(delta)
-
-        if self._inline_think_phase == self._PHASE_REASONING:
-            # Inside a  think block — look for closing tag
-            close_re = _re.compile(r"</(?:think|thinking)\s*>", _re.IGNORECASE)
-            m = close_re.search(delta)
-            if m:
-                # Close tag found: emit pre-close as reasoning, switch to text
-                events: list[bytes] = []
-                pre = delta[:m.start()]
-                if pre:
-                    events.extend(self.push_reasoning_delta(pre))
-                events.extend(self.finalize_reasoning_if_open())
-                self._inline_think_phase = self._PHASE_TEXT
-                post = delta[m.end():]
-                if post:
-                    events.extend(self.push_text_delta(post))
-                return events
-            # No close tag yet — entire delta is reasoning
-            return self.push_reasoning_delta(delta)
-
-        # Phase: DETECTING — accumulate to check for  prefix
-        self._inline_think_buffer += delta
-        buf = self._inline_think_buffer.lstrip()
-
-        think_open_re = _re.compile(r"<(?:think|thinking)\s*>", _re.IGNORECASE)
-        m = think_open_re.match(buf)
-        if m:
-            # Detected  open tag — switch to reasoning phase
-            self._inline_think_phase = self._PHASE_REASONING
-            events: list[bytes] = []
-            # Anything after the open tag is reasoning content
-            after_tag = buf[m.end():]
-            if after_tag:
-                events.extend(self.push_reasoning_delta(after_tag))
-            self._inline_think_buffer = ""
-            return events
-
-        # Check if buffer could still be a partial  prefix
-        if could_be_partial_think_open(buf):
-            # Not enough data yet — keep buffering (silently)
-            return []
-
-        # Not a  prefix — flush entire buffer as text
-        self._inline_think_phase = self._PHASE_TEXT
-        events: list[bytes] = []
-        if self._inline_think_buffer:
-            events.extend(self.push_text_delta(self._inline_think_buffer))
-            self._inline_think_buffer = ""
-        return events
+        return self.inline_think.push_content_delta(delta, self)
 
     def push_refusal_part(self, refusal: str) -> list[bytes]:
         return self.message.push_refusal_part(self.envelope, refusal)
@@ -120,16 +61,8 @@ class ResponsesStreamState:
         events: list[bytes] = []
         events.extend(self.envelope.ensure_started())
 
-        # Flush inline think buffer: if still in detecting/reasoning phase,
-        # treat buffered content as text (unclosed think block at stream end)
-        if self._inline_think_phase == self._PHASE_REASONING:
-            # Unclosed think block — treat accumulated reasoning as-is
-            events.extend(self.finalize_reasoning_if_open())
-        elif self._inline_think_phase == self._PHASE_DETECTING and self._inline_think_buffer:
-            # Never saw a think tag — emit buffer as text
-            events.extend(self.push_text_delta(self._inline_think_buffer))
-            self._inline_think_buffer = ""
-        self._inline_think_phase = self._PHASE_TEXT
+        # Flush inline think state machine
+        events.extend(self.inline_think.flush_on_finalize(self))
 
         events.extend(self.reasoning.finalize(self.envelope))
         events.extend(self.message.finalize(self.envelope))
@@ -167,8 +100,6 @@ class ResponsesStreamState:
         Preserves full structured content (text + refusal parts) so that
         previous_response_id continuations see the complete history.
         """
-        from .models import ChatMessage
-
         tool_call_states = {k: v for k, v in self.tools.tool_calls.items() if v.name}
 
         # Build content from finalized parts — includes both text and refusal
