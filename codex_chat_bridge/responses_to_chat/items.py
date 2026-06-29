@@ -38,7 +38,23 @@ def _existing_call_ids(messages: list[ChatMessage]) -> set[str]:
     return ids
 
 
-def flush_pending_tool_calls(messages: list[ChatMessage], pending_tool_calls: list[dict[str, Any]], pending_reasoning: str | None) -> None:
+def _extract_call_id(item: dict[str, Any]) -> str:
+    """Extract and normalise a call_id from an item dict."""
+    return str(item.get("call_id") or item.get("id") or "call_0")
+
+
+def _should_skip(item: dict[str, Any], skip_ids: set[str]) -> bool:
+    """Return True if this item's call_id was already seen in the session."""
+    cid = item.get("call_id") or item.get("id")
+    return isinstance(cid, str) and cid in skip_ids
+
+
+def flush_pending_tool_calls(
+    messages: list[ChatMessage],
+    pending_tool_calls: list[dict[str, Any]],
+    pending_reasoning: str | None,
+) -> None:
+    """Flush accumulated tool_calls into a single assistant message."""
     if not pending_tool_calls:
         return
     messages.append(
@@ -52,23 +68,34 @@ def flush_pending_tool_calls(messages: list[ChatMessage], pending_tool_calls: li
     pending_tool_calls.clear()
 
 
-def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: list[ChatMessage], tool_context: BridgeToolContext) -> None:
+def append_input_items_as_chat_messages(
+    payload: ResponsesRequest,
+    messages: list[ChatMessage],
+    tool_context: BridgeToolContext,
+) -> None:
     pending_tool_calls: list[dict[str, Any]] = []
     pending_reasoning: str | None = None
     skip_call_ids = _existing_call_ids(messages)
 
+    def _flush() -> None:
+        nonlocal pending_reasoning
+        flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
+        pending_reasoning = None
+
     for item in iter_input_items(payload):
+        # ---- Plain string input → user message ----
         if isinstance(item, str):
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
+            _flush()
             messages.append(ChatMessage(role="user", content=item))
             continue
+
         if not isinstance(item, dict):
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
+            _flush()
             continue
 
         item_type = item.get("type")
+
+        # ---- Reasoning items ----
         if item_type == "reasoning":
             text = reasoning_item_text(item).strip()
             if text:
@@ -76,111 +103,88 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
                     continue
                 pending_reasoning = text if not pending_reasoning else pending_reasoning + "\n\n" + text
             continue
+
+        # ---- Text content items → user message ----
         if item_type in {"input_text", "output_text", "text"}:
             text = item.get("text", "") if isinstance(item.get("text"), str) else ""
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
+            _flush()
             messages.append(ChatMessage(role="user", content=text.strip()))
             continue
+
+        # ---- Image items → user message with image_url part ----
         if item_type == "input_image":
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
+            _flush()
             try:
                 image_part = chat_image_part_from_input_item(item)
             except UnsupportedResponsesInputItemError:
                 continue
             messages.append(ChatMessage(role="user", content=[image_part]))
             continue
+
+        # ---- Tool call items → accumulate into pending_tool_calls ----
         if item_type == "function_call":
-            call_id = item.get("call_id") or item.get("id") or ""
-            if call_id in skip_call_ids:
+            if _should_skip(item, skip_call_ids):
                 continue
-            pending_tool_calls.append(
-                {
-                    "id": item.get("call_id") or item.get("id") or "call_0",
-                    "type": "function",
-                    "function": {
-                        "name": tool_context.chat_name_for_function(item.get("name") or "unknown_tool", item.get("namespace") if isinstance(item.get("namespace"), str) else None),
-                        "arguments": canonicalize_tool_arguments(item.get("arguments")),
-                    },
-                }
-            )
+            pending_tool_calls.append({
+                "id": item.get("call_id") or item.get("id") or "call_0",
+                "type": "function",
+                "function": {
+                    "name": tool_context.chat_name_for_function(
+                        item.get("name") or "unknown_tool",
+                        item.get("namespace") if isinstance(item.get("namespace"), str) else None,
+                    ),
+                    "arguments": canonicalize_tool_arguments(item.get("arguments")),
+                },
+            })
             continue
+
         if item_type == "custom_tool_call":
-            call_id = item.get("call_id") or item.get("id") or ""
-            if call_id in skip_call_ids:
+            if _should_skip(item, skip_call_ids):
                 continue
-            pending_tool_calls.append(
-                {
-                    "id": item.get("call_id") or item.get("id") or "call_0",
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name") or "unknown_tool",
-                        "arguments": custom_tool_input_to_chat_arguments(item.get("input", "")),
-                    },
-                }
-            )
+            pending_tool_calls.append({
+                "id": item.get("call_id") or item.get("id") or "call_0",
+                "type": "function",
+                "function": {
+                    "name": item.get("name") or "unknown_tool",
+                    "arguments": custom_tool_input_to_chat_arguments(item.get("input", "")),
+                },
+            })
             continue
+
         if item_type == "tool_search_call":
-            call_id = item.get("call_id") or item.get("id") or ""
-            if call_id in skip_call_ids:
+            if _should_skip(item, skip_call_ids):
                 continue
-            pending_tool_calls.append(
-                {
-                    "id": item.get("call_id") or item.get("id") or "call_0",
-                    "type": "function",
-                    "function": {
-                        "name": TOOL_SEARCH_PROXY_NAME,
-                        "arguments": canonicalize_tool_arguments(item.get("arguments")),
-                    },
-                }
-            )
+            pending_tool_calls.append({
+                "id": item.get("call_id") or item.get("id") or "call_0",
+                "type": "function",
+                "function": {
+                    "name": TOOL_SEARCH_PROXY_NAME,
+                    "arguments": canonicalize_tool_arguments(item.get("arguments")),
+                },
+            })
             continue
-        if item_type == "function_call_output":
-            call_id = item.get("call_id") or item.get("id") or ""
-            if call_id in skip_call_ids:
+
+        # ---- Tool output items → tool message ----
+        if item_type in {"function_call_output", "custom_tool_call_output", "tool_search_output"}:
+            if _should_skip(item, skip_call_ids):
                 continue
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
+            _flush()
+            if item_type == "function_call_output":
+                tool_content = normalize_tool_output_content(item.get("output"))
+            else:
+                tool_content = canonical_json_string(item)
             messages.append(
                 ChatMessage(
                     role="tool",
-                    tool_call_id=str(item.get("call_id") or item.get("id") or "call_0"),
-                    content=normalize_tool_output_content(item.get("output")),
-                )
-            )
-            continue
-        if item_type == "custom_tool_call_output":
-            call_id = item.get("call_id") or item.get("id") or ""
-            if call_id in skip_call_ids:
-                continue
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
-            messages.append(
-                ChatMessage(
-                    role="tool",
-                    tool_call_id=str(item.get("call_id") or item.get("id") or "call_0"),
-                    content=canonical_json_string(item),
-                )
-            )
-            continue
-        if item_type == "tool_search_output":
-            call_id = item.get("call_id") or item.get("id") or ""
-            if call_id in skip_call_ids:
-                continue
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-            pending_reasoning = None
-            messages.append(
-                ChatMessage(
-                    role="tool",
-                    tool_call_id=str(item.get("call_id") or item.get("id") or "call_0"),
-                    content=canonical_json_string(item),
+                    tool_call_id=_extract_call_id(item),
+                    content=tool_content,
                 )
             )
             continue
 
+        # ---- Generic message items (role/content dicts) ----
         if "role" in item or "content" in item or item_type == "message":
-            flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
+            _flush()
             role = str(item.get("role") or "user")
             chat_role = "system" if role in {"system", "developer"} else role
             if chat_role not in {"system", "user", "assistant", "tool"}:
@@ -198,11 +202,10 @@ def append_input_items_as_chat_messages(payload: ResponsesRequest, messages: lis
                 )
             )
             ensure_tool_call_reasoning_content(messages[-1])
-            pending_reasoning = None
             continue
 
-        flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
-        pending_reasoning = None
+        # ---- Unknown item type → silently skip ----
+        _flush()
 
     flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
     backfill_tool_call_reasoning_content(messages)
