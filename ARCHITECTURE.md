@@ -53,9 +53,10 @@ Responses client -> bridge -> Chat Completions upstream
 ## 新项目模块边界
 
 ### `config.py`
-- 环境变量读取
+- 环境变量读取（`_UNSET` 哨兵模式，显式传值不被 env 覆写）
 - NewAPI 单上游兼容入口
-- 上游 base_url / api_key / timeout / public base_url
+- 上游 base_url / api_key / timeout / streaming / max_retries / concurrency / public base_url
+- `get_settings()` 返回模块级单例
 
 ### `models.py`
 - Responses 请求/响应的最小结构
@@ -77,7 +78,11 @@ Responses client -> bridge -> Chat Completions upstream
 
 ### `responses_to_chat/`
 - 请求转换子模块目录
-- `common.py`：文本/content/tool-call reasoning/system collapse 等共享语义
+- `common.py`：常量、re-export 门面（文本/content/tool-call reasoning/system collapse 等共享语义）
+- `content_helpers.py`：flatten_text_content, instruction_text, reasoning_item_text, normalize_tool_output_content
+- `image_security.py`：is_safe_image_url, chat_image_part_from_input_item
+- `message_normalization.py`：_sanitize_chat_messages, collapse_system_messages_to_head
+- `tool_helpers.py`：normalize_message_tool_calls, reasoning backfill 辅助
 - `items.py`：Responses input items -> Chat messages 组装
 - `request.py`：request-level 组装、response_format/reasoning/max token 映射
 - `errors.py`：显式输入项错误类型
@@ -148,7 +153,10 @@ Responses client -> bridge -> Chat Completions upstream
 
 ### `api/`
 - HTTP 边界子模块目录
-- `routes.py`：FastAPI 路由、单上游 NewAPI 透传与 request lifecycle 编排
+- `lifespan.py`：FastAPI startup/shutdown 生命周期（health 状态、配置验证、upstream 连通性检查）+ create_app() 工厂
+- `routes.py`：路由注册 + request lifecycle 编排（流式路径提取为独立函数）
+- `middleware.py`：access-log JSONL 中间件 + Prometheus metrics 采集
+- `concurrency.py`：asyncio.Semaphore 并发限制
 - `policy.py`：effective-input UX guard（`empty_effective_input` / `blank_effective_input`）
 - `errors.py`：统一 JSON error response 组装
 
@@ -252,6 +260,16 @@ Responses client -> bridge -> Chat Completions upstream
 
 response.created / response.in_progress / response.output_item.added / response.output_item.done / response.output_text.delta / response.output_text.done / response.content_part.added / response.content_part.done / response.reasoning_summary_text.delta / response.reasoning_summary_text.done / response.reasoning_summary_part.added / response.reasoning_summary_part.done / response.function_call_arguments.delta / response.function_call_arguments.done / response.completed / response.failed
 
+### `session_store.py`
+- 进程内 `SessionStore`（dict + TTL + max_sessions 惰性清理）
+- `SessionRecord`：messages + tool_context 深拷贝隔离（持久化时 deepcopy，后续请求不会变异已保存历史）
+- `resolve_session()`：从 `previous_response_id` 恢复会话 + 合并新请求的 tools
+- `save_session()`：追加 assistant_message 后持久化
+
+---
+
 **备注 2：previous_response_id**（已实现）
 
-当前使用进程内 SessionStore（dict + TTL），每次响应完成后保存 messages、tool_context、model。后续请求携带 `previous_response_id` 时，从 store 恢复上下文并将新 input items 追加到已有消息列表后。单进程足够，如需多进程/持久化替换 SessionStore 后端即可。
+当前使用进程内 SessionStore（dict + TTL），每次响应完成后保存 messages、tool_context、model。`SessionRecord` 构造时 deep-copy messages 和 tool_context，确保后续请求对返回数据的修改不会影响已持久化的历史。
+
+后续请求携带 `previous_response_id` 时，从 store 恢复上下文（messages 已隔离可安全修改），并将新请求的 tools 合并到已有 tool_context 中，最后将新 input items 追加到已有消息列表后。单进程足够，如需多进程/持久化替换 SessionStore 后端即可。流式响应的 refusal 等结构化内容也会完整保留在 session 历史中。

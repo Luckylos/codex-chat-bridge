@@ -1,6 +1,6 @@
 # Reasoning Policy Freeze
 
-_Last updated: 2026-06-28_
+_Last updated: 2026-06-29_
 
 ## 目标
 
@@ -135,38 +135,44 @@ Responses-speaking client -> codex-chat-bridge -> Chat Completions upstream (sin
 
 ## 4. Provider bucket 冻结
 
-后续 reasoning provider policy 冻结为四类：
+后续 reasoning provider policy 冻结为**两个内部类别**：
 
-1. `openai_like`
-2. `deepseek`
-3. `glm`
-4. `kimi`
+1. `effort`（支持 reasoning_effort 的 provider）
+2. `passthrough`（不传 reasoning 参数，保留 provider default）
+
+> **历史说明**：初始实现使用 4 个 bucket（openai_like / deepseek / glm / kimi），
+> 但实测发现 openai_like / deepseek / glm 在 effort 编码上行为完全一致
+> （unspecified → provider_default；有 effort → 仅传 reasoning_effort），
+> 因此合并为 `effort` 类别。kimi 不接受 reasoning 参数，归为 `passthrough`。
+> `select_reasoning_provider_bucket()` 保留为外部兼容 API。
+
+分类规则：
+
+| 内部类别 | 模型名匹配 | 行为 |
+|:--|:--|:--|
+| `effort` | deepseek / glm / openai-like 等 | unspecified → provider_default；有 effort → 仅传 `reasoning_effort` |
+| `passthrough` | kimi / moonshot 等 | 始终 provider_default，不传 reasoning 参数 |
 
 注意：
 
 - 这里的分类是 **reasoning-encoding bucket**，不是全局 provider 能力中心
 - bridge 只在 reasoning 参数编码层区分这些 bucket
-- bucket 选择允许依赖 **模型名规则匹配**，这是当前架构下最简单且最可控的策略
+- bucket 选择允许依赖 **模型名规则匹配**
 
 ---
 
-## 5. Bucket 级编码规则（冻结）
+## 5. 内部类别编码规则（冻结）
 
-## 5.1 `openai_like`
+### 5.1 `effort`（openai-like / deepseek / glm 等）
 
-适用：
-
-- 标准 OpenAI / GPT 类上游
-- 只提供 Chat Completions 格式，但 reasoning 参数更接近标准 OpenAI 语义的厂商
-
-### `unspecified`
+#### `unspecified`
 
 发送：
 
 - `provider_default`
 - 即：不传 `thinking`，不传 `reasoning_effort`
 
-### `none` / `high` / `xhigh`
+#### `none` / `high` / `xhigh`
 
 发送：
 
@@ -178,96 +184,16 @@ Responses-speaking client -> codex-chat-bridge -> Chat Completions upstream (sin
 
 说明：
 
-- `openai_like` 不应默认再混入 `thinking={"type":"enabled"}`
-- bridge 继续负责 `Responses -> Chat request -> Chat response -> Responses` 的协议转换，但在 reasoning 控制上采用 **effort-first** 风格
+- `effort` 类别统一走 **effort-first** 策略
+- 不再为 glm 单独混入 `thinking={\"type\":\"enabled\"}`
+- 实测验证：NVIDIA NIM GLM 端点接受 `reasoning_effort`，拒绝 `thinking` 参数
+- 若某 provider 未来确实需要 `thinking` + `reasoning_effort` 双字段，可从 `effort` 中拆出新子类
 
 ---
 
-## 5.2 `deepseek`
+### 5.2 `passthrough`（kimi 等）
 
-### `unspecified`
-
-发送：
-
-- `provider_default`
-
-说明：
-
-- DeepSeek 官方文档表明 thinking 默认开启，常规请求默认 effort=`high`
-- 因此未指定时不需要 bridge 额外伪造强度
-
-### `none` / `high` / `xhigh`
-
-发送：
-
-```json
-{
-  "reasoning_effort": "<none|high|xhigh>"
-}
-```
-
-说明：
-
-- DeepSeek 归到 **effort-first**
-- 不要求 bridge 默认额外传 `thinking={"type":"enabled"}`
-- 如果实际链路中 `thinking` 也是可接受字段，那属于兼容 fallback / provider 容忍范围，不是首发策略
-
----
-
-## 5.3 `glm`
-
-### `unspecified`
-
-发送：
-
-- `provider_default`
-
-说明：
-
-- GLM 官方文档表明 `thinking.type` 默认 `enabled`
-- `GLM-5.2+` 的 `reasoning_effort` 默认且推荐 `max`
-- 因此未指定时，bridge 不应先抢着注入 `thinking` / `reasoning_effort`
-
-### `none`
-
-首发发送：
-
-```json
-{
-  "thinking": {"type": "disabled"}
-}
-```
-
-必要时（未来如验证需要）可评估是否补充：
-
-```json
-"reasoning_effort": "none"
-```
-
-但冻结基线以 `thinking.disabled` 为准。
-
-### `high` / `xhigh`
-
-首发发送：
-
-```json
-{
-  "thinking": {"type": "enabled"},
-  "reasoning_effort": "<high|xhigh>"
-}
-```
-
-说明：
-
-- GLM 归到 **thinking + effort** 方言
-- 这里的 `reasoning_effort` 是否最终被上游/网关映射为 `max` 等内部值，由上游负责
-- bridge 不再自己保留 `max` 内部态
-
----
-
-## 5.4 `kimi`
-
-### 全部情况
+#### 全部情况
 
 发送：
 
@@ -320,20 +246,17 @@ MODEL_REASONING_BUCKET_RULES = [
 
 ### reasoning 相关 fallback 的原则
 
-- 首发先按 bucket 编码
+- 首发先按内部类别编码
 - 若上游返回 400 incompatible reasoning fields
 - 根据错误文本 + 当前编码做方向性降级
-- `none` 始终是最后兜底
+- `provider_default` 始终是最后兜底
 
 ### 方向性原则
 
-- `openai_like` / `deepseek`
-  - effort 被拒 -> 回退到 `provider_default` 或 `none`
-- `glm`
-  - `thinking` 被拒 -> 回退到 `provider_default` / `none`
-  - `reasoning_effort` 被拒 -> 尝试仅保留 `thinking`
-- `kimi`
-  - 原则上首发即 `provider_default`，不依赖 reasoning fallback
+- `effort`
+  - effort 被拒 -> 回退到 `provider_default`
+- `passthrough`
+  - 首发即 `provider_default`，不依赖 reasoning fallback
 
 非 reasoning 的 400 compat 规则继续保留：
 
@@ -409,22 +332,20 @@ MODEL_REASONING_BUCKET_RULES = [
 - `low/medium` -> `high`
 - `max/xhigh` -> `xhigh`
 
-### 10.2 provider bucket 选择
-- `deepseek-*` -> `deepseek`
-- `glm-*` / `zhipu-*` / `bigmodel-*` -> `glm`
-- `kimi-*` / `moonshot-*` -> `kimi`
-- 其他 -> `openai_like`
+### 10.2 内部类别选择
+- `deepseek-*` -> `effort`
+- `glm-*` / `zhipu-*` / `bigmodel-*` -> `effort`
+- `kimi-*` / `moonshot-*` -> `passthrough`
+- 其他 -> `effort`
 
 ### 10.3 provider encoder
-- `openai_like` + `high` -> `reasoning_effort=high`
-- `deepseek` + `xhigh` -> `reasoning_effort=xhigh`
-- `glm` + `high` -> `thinking.enabled + reasoning_effort=high`
-- `glm` + `none` -> `thinking.disabled`
-- `kimi` + 任意 effort -> `provider_default`
+- `effort` + `high` -> `reasoning_effort=high`
+- `effort` + `xhigh` -> `reasoning_effort=xhigh`
+- `effort` + `unspecified` -> `provider_default`
+- `passthrough` + 任意 effort -> `provider_default`
 
 ### 10.4 compatibility fallback
 - stream / non-stream 一致
-- `thinking` 被拒的 glm 兼容回退
 - `reasoning_effort` 被拒的 effort-first 兼容回退
 - 非 reasoning compat 规则不回归
 
@@ -434,16 +355,16 @@ MODEL_REASONING_BUCKET_RULES = [
 
 当以下条件全部满足时，可认为这次大重构达标：
 
-- [ ] reasoning 最终编码只有一个真相源
-- [ ] `responses_to_chat/request.py` 不再直接承担 provider-specific reasoning wire dialect
-- [ ] canonical effort 只保留 `unspecified/none/high/xhigh`
-- [ ] OpenAI-like / DeepSeek / GLM / Kimi 四类 bucket 行为与本文件一致
-- [ ] stream / non-stream compatibility fallback 继续统一
-- [ ] 全量测试通过
-- [ ] 文档 / 注释 / 测试名称与最终真实行为一致，不再出现“预构造体”和“真实 upstream 请求体”语义混淆
+- [x] reasoning 最终编码只有一个真相源（`reasoning_policy.py`）
+- [x] `responses_to_chat/request.py` 不再直接承担 provider-specific reasoning wire dialect
+- [x] canonical effort 只保留 `unspecified/none/high/xhigh`
+- [x] 内部类别合并为 `effort` / `passthrough`，4 bucket 行为一致
+- [x] stream / non-stream compatibility fallback 继续统一
+- [x] 全量测试通过（128/128）
+- [x] 文档 / 注释 / 测试名称与最终真实行为一致，不再出现"预构造体"和"真实 upstream 请求体"语义混淆
 
 ---
 
 ## 12. 一句话冻结
 
-**后续大重构的目标不是继续补 reasoning 小补丁，而是把 reasoning 收敛成：`canonical effort (unspecified/none/high/xhigh)` + `model-name-selected provider bucket` + `single-source upstream encoder`，其中 OpenAI-like 与 DeepSeek 走 `reasoning_effort` 线，GLM 走 `thinking + reasoning_effort` 线，Kimi 始终保留 provider default。**
+**后续大重构的目标不是继续补 reasoning 小补丁，而是把 reasoning 收敛成：`canonical effort (unspecified/none/high/xhigh)` + `model-name-selected internal category (effort/passthrough)` + `single-source upstream encoder`，其中 effort 类别统一走 `reasoning_effort` 线，passthrough 类别始终保留 provider default。**
