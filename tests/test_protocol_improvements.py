@@ -7,7 +7,7 @@ sys.path.insert(0, "/opt/codex-chat-bridge")
 from codex_chat_bridge.models import ResponsesRequest
 from codex_chat_bridge.responses_to_chat.request import responses_to_chat_request
 from codex_chat_bridge.responses_to_chat.message_normalization import _sanitize_chat_messages
-from codex_chat_bridge.chat_to_responses.common import message_content_parts
+from codex_chat_bridge.chat_to_responses.annotations import message_content_parts
 
 
 class MessageAnnotationTests(unittest.TestCase):

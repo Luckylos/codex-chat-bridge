@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..bridge_context import BridgeToolContext, custom_tool_input_from_chat_arguments, parse_tool_arguments_object
-from ..response_semantics import canonicalize_tool_arguments
+from ..tool_arguments import canonicalize_tool_arguments
 
 
 def tool_call_to_response_item(

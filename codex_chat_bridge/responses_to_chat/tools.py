@@ -4,7 +4,7 @@ from typing import Any
 
 from ..bridge_context import BridgeToolContext
 from ..models import ChatMessage
-from ..response_semantics import canonicalize_tool_arguments
+from ..tool_arguments import canonicalize_tool_arguments
 from .errors import UnsupportedResponsesInputItemError
 
 

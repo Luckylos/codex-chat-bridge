@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from ..response_semantics import map_chat_usage
-from ..sse_utils import sse_event
+from ..protocol.sse import sse_event
 
 
 class ResponseEnvelopeState:

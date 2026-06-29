@@ -15,7 +15,7 @@ from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
 from ..errors import BridgeError, InvalidRequestError
 from ..models import ChatMessage, ResponsesRequest
-from ..session_store import _assistant_message_from_chat_body, resolve_session, save_session
+from ..protocol.session import _assistant_message_from_chat_body, resolve_session, save_session
 from ..stream_chat_to_responses import (
     create_responses_sse_from_chat_response,
     create_responses_sse_stream_from_chat_stream,

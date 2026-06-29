@@ -4,19 +4,19 @@ from typing import Any
 
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments
 from ..models import ChatMessage, ResponsesRequest
-from ..response_semantics import canonicalize_tool_arguments
+from ..tool_arguments import canonicalize_tool_arguments
+from .content import reasoning_item_text, normalize_tool_output_content
+from .media import chat_image_part_from_input_item, chat_audio_part_from_input_item
 from .common import (
-    append_reasoning_to_last_assistant,
-    backfill_tool_call_reasoning_content,
     canonical_json_string,
-    chat_image_part_from_input_item,
-    chat_audio_part_from_input_item,
     chat_message_content_from_response_content,
-    ensure_tool_call_reasoning_content,
-    normalize_message_tool_calls,
-    normalize_tool_output_content,
-    reasoning_item_text,
     iter_input_items,
+)
+from .tools import (
+    normalize_message_tool_calls,
+    append_reasoning_to_last_assistant,
+    ensure_tool_call_reasoning_content,
+    backfill_tool_call_reasoning_content,
 )
 from .errors import UnsupportedResponsesInputItemError
 from .orphan import has_matching_call

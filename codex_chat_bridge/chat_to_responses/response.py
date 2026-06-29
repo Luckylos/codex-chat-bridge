@@ -5,7 +5,8 @@ from typing import Any
 from ..bridge_context import BridgeToolContext
 from ..models import ResponsesResponse
 from ..response_semantics import map_chat_usage, response_status_from_finish_reason, incomplete_reason_from_finish_reason
-from .common import extract_reasoning_text, message_content_parts, output_text_from_parts
+from .text import extract_reasoning_text, output_text_from_parts
+from .annotations import message_content_parts
 from .tools import chat_tool_calls_to_response_items
 
 # Fields echoed from the original Responses request into the response object

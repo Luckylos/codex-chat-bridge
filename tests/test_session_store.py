@@ -5,7 +5,7 @@ import unittest
 
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.bridge_context import BridgeToolContext
-from codex_chat_bridge.session_store import (
+from codex_chat_bridge.protocol.session import (
     SessionRecord,
     SessionStore,
     resolve_session,

@@ -5,7 +5,7 @@ from typing import Any
 from .bridge_context import BridgeToolContext
 from .inline_think_sm import InlineThinkStateMachine
 from .models import ChatMessage
-from .sse_utils import sse_event
+from .protocol.sse import sse_event
 from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore
 
 

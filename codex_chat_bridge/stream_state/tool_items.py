@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ..bridge_context import custom_tool_input_from_chat_arguments, parse_tool_arguments_object
-from ..response_semantics import canonicalize_tool_arguments
+from ..tool_arguments import canonicalize_tool_arguments
 
 
 @dataclass

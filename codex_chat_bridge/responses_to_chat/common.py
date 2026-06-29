@@ -2,33 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..bridge_context import BridgeToolContext, canonical_json_string, iter_request_input_items
+from ..bridge_context import canonical_json_string, iter_request_input_items
 from ..models import ChatMessage, ResponsesRequest
+from .content import flatten_text_content
 from .errors import UnsupportedResponsesInputItemError
-
-# Re-export from split modules — all consumers continue to import from .common
-from .content import (
-    flatten_text_content,
-    instruction_text,
-    reasoning_item_text,
-    normalize_tool_output_content,
-)
-from .media import (
-    is_safe_image_url,
-    chat_image_part_from_input_item,
-    chat_audio_part_from_input_item,
-)
-from .message_normalization import (
-    _sanitize_chat_messages,
-    collapse_system_messages_to_head,
-)
-from .tools import (
-    normalize_message_tool_calls,
-    message_has_tool_calls,
-    append_reasoning_to_last_assistant,
-    ensure_tool_call_reasoning_content,
-    backfill_tool_call_reasoning_content,
-)
+from .media import chat_image_part_from_input_item, chat_audio_part_from_input_item
 
 # ------------------------------------------------------------------
 # Constants
