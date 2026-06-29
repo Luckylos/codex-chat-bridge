@@ -3,16 +3,23 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from ..config import get_settings
+from ..errors import BridgeError
 from ..upstream import UpstreamClient
+from .errors import bridge_error_response
 from .middleware import RequestLogMiddleware
 
 _logger = logging.getLogger("codex-chat-bridge")
 _access_logger = logging.getLogger("codex-chat-bridge.access")
 
 health_upstream_reachable: bool | None = None
+
+
+async def handle_bridge_error(_request: Request, exc: Exception):
+    assert isinstance(exc, BridgeError)
+    return bridge_error_response(exc)
 
 
 @asynccontextmanager
@@ -51,4 +58,5 @@ def create_app() -> FastAPI:
         title="codex-chat-bridge", version="0.4.0", lifespan=bridge_lifespan,
     )
     application.add_middleware(RequestLogMiddleware)
+    application.add_exception_handler(BridgeError, handle_bridge_error)
     return application

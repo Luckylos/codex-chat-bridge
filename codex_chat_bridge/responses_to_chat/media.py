@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ResponsesInputItem, ImageURLPart, InputAudioPart
+
 from .errors import UnsupportedResponsesInputItemError
 
 # Only allow https:// and data: URI schemes for media URLs.
@@ -47,12 +49,12 @@ def is_safe_audio_url(url: str | None) -> bool:
     return _is_safe_media_url(url, allowed_data_prefix="data:audio/")
 
 
-def chat_image_part_from_input_item(item: dict[str, Any]) -> dict[str, Any]:
+def chat_image_part_from_input_item(item: ResponsesInputItem) -> ImageURLPart:
     """Convert a Responses input_image item to a Chat Completions image_url part."""
     image_value = item.get("image_url")
     if isinstance(image_value, str) and image_value:
         url = image_value
-        payload: dict[str, Any] = {"url": url}
+        payload: ImageURLPart = {"url": url}  # type: ignore[typeddict-item]
     elif isinstance(image_value, dict) and isinstance(image_value.get("url"), str) and image_value.get("url"):
         url = image_value["url"]
         payload = dict(image_value)
@@ -72,7 +74,7 @@ def chat_image_part_from_input_item(item: dict[str, Any]) -> dict[str, Any]:
     return {"type": "image_url", "image_url": payload}
 
 
-def chat_audio_part_from_input_item(item: dict[str, Any]) -> dict[str, Any]:
+def chat_audio_part_from_input_item(item: ResponsesInputItem) -> InputAudioPart:
     """Convert a Responses input_audio item to a Chat Completions input_audio part.
 
     Supports:

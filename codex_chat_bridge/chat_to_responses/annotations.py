@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ChatMessageInput, ContentPart
+
 from .text import _strip_inline_think_from_content
 
 
-def extract_message_annotations(message: dict[str, Any]) -> list[dict[str, Any]]:
+def extract_message_annotations(message: ChatMessageInput) -> list[dict[str, Any]]:
     """Extract annotations from the Chat Completions message top-level field.
 
     Some models (e.g. gpt-4o with web_search) place ``url_citation`` /
@@ -27,24 +29,24 @@ def extract_message_annotations(message: dict[str, Any]) -> list[dict[str, Any]]
     return []
 
 
-def message_content_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
+def message_content_parts(message: ChatMessageInput) -> list[ContentPart]:
     """Build Responses output_text/refusal content parts from a Chat Completions message.
 
     Merges message-level annotations into each output_text part, deduplicating
     against any part-level annotations already present.
     """
-    content: list[dict[str, Any]] = []
+    content: list[ContentPart] = []
     raw_content = message.get("content")
 
     if isinstance(raw_content, str):
         # Strip inline <think> blocks that were already extracted as reasoning
         stripped = _strip_inline_think_from_content(raw_content)
         if isinstance(stripped, str) and stripped:
-            msg_annotations: list[dict[str, Any]] = extract_message_annotations(message)
+            msg_annotations = extract_message_annotations(message)
             content.append({"type": "output_text", "text": stripped, "annotations": msg_annotations})
     elif isinstance(raw_content, list):
         # Merge message-level annotations into output_text parts that lack them
-        msg_annotations: list[dict[str, Any]] = extract_message_annotations(message)
+        msg_annotations = extract_message_annotations(message)
         for part in raw_content:
             if not isinstance(part, dict):
                 continue

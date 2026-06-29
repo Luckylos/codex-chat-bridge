@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import unittest
 
-from codex_chat_bridge.responses_to_chat.common import BUILT_IN_RESPONSES_TOOLS
-from codex_chat_bridge.responses_to_chat.media import chat_image_part_from_input_item, is_safe_image_url
+from codex_chat_bridge.responses_to_chat.constants import BUILT_IN_RESPONSES_TOOLS
 from codex_chat_bridge.responses_to_chat.errors import UnsupportedResponsesInputItemError
+from codex_chat_bridge.responses_to_chat.media import chat_image_part_from_input_item, is_safe_image_url
 
 
 class ImageUrlSecurityTests(unittest.TestCase):

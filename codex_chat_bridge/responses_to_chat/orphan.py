@@ -10,10 +10,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ChatToolCallOutput
+
 from ..models import ChatMessage
 
 
-def has_matching_call(call_id: str, pending_tool_calls: list[dict[str, Any]], messages: list[ChatMessage]) -> bool:
+def has_matching_call(call_id: str, pending_tool_calls: list[ChatToolCallOutput], messages: list[ChatMessage]) -> bool:
     """Check if a call_id has a matching tool call in pending buffer or flushed messages.
 
     Args:

@@ -2,16 +2,18 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ChatToolCallOutput
+
 from ..bridge_context import BridgeToolContext
 from ..models import ChatMessage
 from ..tool_arguments import canonicalize_tool_arguments
 
 
-def normalize_message_tool_calls(value: Any, tool_context: BridgeToolContext) -> list[dict[str, Any]] | None:
+def normalize_message_tool_calls(value: Any, tool_context: BridgeToolContext) -> list[ChatToolCallOutput] | None:
     """Normalize Responses tool_calls to Chat Completions format."""
     if not isinstance(value, list):
         return None
-    normalized: list[dict[str, Any]] = []
+    normalized: list[ChatToolCallOutput] = []
     for index, tool_call in enumerate(value):
         if not isinstance(tool_call, dict):
             continue

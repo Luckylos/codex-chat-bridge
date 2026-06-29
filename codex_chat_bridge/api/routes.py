@@ -13,17 +13,16 @@ from starlette.responses import Response as StarletteResponse
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
-from ..errors import BridgeError
+from ..errors import BridgeError, InvalidRequestError, UpstreamError
 from ..models import ResponsesRequest
 from ..protocol.session import _assistant_message_from_chat_body, resolve_session, save_session
 from ..stream_chat_to_responses import (
     create_responses_sse_from_chat_response,
     create_responses_sse_stream_from_chat_stream,
 )
-from ..responses_to_chat import UnsupportedResponsesInputItemError, responses_to_chat_request
+from ..responses_to_chat import responses_to_chat_request
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
-from .errors import bridge_error_response, build_error_response, invalid_request_error
 from .lifespan import create_app, health_upstream_reachable
 from .policy import validate_effective_messages
 from ..metrics import concurrency_usage
@@ -58,7 +57,7 @@ async def list_models() -> JSONResponse:
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
     except Exception as exc:
-        return build_error_response(str(exc), code="upstream_models_unavailable", status_code=502)
+        raise UpstreamError(str(exc), code="upstream_models_unavailable", status_code=502) from exc
 
 
 @app.post("/v1/responses")
@@ -86,9 +85,9 @@ async def _create_response_core(payload: ResponsesRequest):
         settings = get_settings()
         resolved_model = (payload.model or "").strip()
         if not resolved_model:
-            return invalid_request_error(
+            raise InvalidRequestError(
                 "Responses request is missing required field: model.",
-                "missing_model",
+                code="missing_model",
             )
 
         # ---- previous_response_id 恢复 ----
@@ -143,14 +142,12 @@ async def _create_response_core(payload: ResponsesRequest):
                      assistant_message=_assistant)
         return JSONResponse(raw)
 
-    except UnsupportedResponsesInputItemError as exc:
-        return invalid_request_error(str(exc), "unsupported_input_item")
-    except BridgeError as exc:
-        return bridge_error_response(exc)
+    except BridgeError:
+        raise
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
     except Exception as exc:
-        return build_error_response(str(exc), code="bridge_runtime_error", status_code=500)
+        raise BridgeError(str(exc), code="bridge_runtime_error", status_code=500) from exc
 
 
 async def _stream_upstream_streaming(

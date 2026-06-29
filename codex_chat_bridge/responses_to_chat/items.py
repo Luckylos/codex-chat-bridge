@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ResponsesInputItem, ChatToolCallOutput
+
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments, canonical_json_string
 from ..models import ChatMessage, ResponsesRequest
 from ..tool_arguments import canonicalize_tool_arguments
 from .content import reasoning_item_text, normalize_tool_output_content
-from .media import chat_image_part_from_input_item, chat_audio_part_from_input_item
-from .common import (
+from .content_mapping import (
     chat_message_content_from_response_content,
     iter_input_items,
 )
+from .media import chat_image_part_from_input_item, chat_audio_part_from_input_item
 from .tools import (
     normalize_message_tool_calls,
     append_reasoning_to_last_assistant,
@@ -39,12 +41,12 @@ def _existing_call_ids(messages: list[ChatMessage]) -> set[str]:
     return ids
 
 
-def _extract_call_id(item: dict[str, Any]) -> str:
+def _extract_call_id(item: ResponsesInputItem) -> str:
     """Extract and normalise a call_id from an item dict."""
     return str(item.get("call_id") or item.get("id") or "call_0")
 
 
-def _should_skip(item: dict[str, Any], skip_ids: set[str]) -> bool:
+def _should_skip(item: ResponsesInputItem, skip_ids: set[str]) -> bool:
     """Return True if this item's call_id was already seen in the session."""
     cid = item.get("call_id") or item.get("id")
     return isinstance(cid, str) and cid in skip_ids
@@ -52,7 +54,7 @@ def _should_skip(item: dict[str, Any], skip_ids: set[str]) -> bool:
 
 def flush_pending_tool_calls(
     messages: list[ChatMessage],
-    pending_tool_calls: list[dict[str, Any]],
+    pending_tool_calls: list[ChatToolCallOutput],
     pending_reasoning: str | None,
 ) -> None:
     """Flush accumulated tool_calls into a single assistant message."""
@@ -74,7 +76,7 @@ def append_input_items_as_chat_messages(
     messages: list[ChatMessage],
     tool_context: BridgeToolContext,
 ) -> None:
-    pending_tool_calls: list[dict[str, Any]] = []
+    pending_tool_calls: list[ChatToolCallOutput] = []
     pending_reasoning: str | None = None
     skip_call_ids = _existing_call_ids(messages)
 

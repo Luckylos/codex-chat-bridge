@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ChatResponseInput
+
 from ..bridge_context import BridgeToolContext
 from ..models import ResponsesResponse
 from ..response_semantics import map_chat_usage, response_status_from_finish_reason, incomplete_reason_from_finish_reason
@@ -36,7 +38,7 @@ def _echo_request_fields(response: ResponsesResponse, original_request: dict | N
 
 
 def chat_text_to_responses(
-    chat_body: dict[str, Any],
+    chat_body: ChatResponseInput,
     fallback_model: str,
     tool_context: BridgeToolContext | None = None,
     original_request: dict[str, Any] | None = None,

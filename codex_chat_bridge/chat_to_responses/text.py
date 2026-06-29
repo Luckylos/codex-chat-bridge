@@ -7,10 +7,12 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ChatMessageInput, ContentPart
+
 from .inline_think import split_inline_think
 
 
-def extract_reasoning_text(message: dict[str, Any]) -> str:
+def extract_reasoning_text(message: ChatMessageInput) -> str:
     """Extract reasoning text from a Chat Completions message.
 
     Checks, in order:
@@ -46,6 +48,6 @@ def _strip_inline_think_from_content(raw_content: Any) -> Any:
     return raw_content
 
 
-def output_text_from_parts(parts: list[dict[str, Any]]) -> str:
+def output_text_from_parts(parts: list[ContentPart]) -> str:
     texts = [part["text"] for part in parts if part.get("type") == "output_text" and isinstance(part.get("text"), str)]
     return "\n".join(texts)

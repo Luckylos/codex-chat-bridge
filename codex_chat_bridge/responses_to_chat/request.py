@@ -5,10 +5,7 @@ from typing import Any
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, build_tool_context_from_request
 from ..models import ChatCompletionsRequest, ChatMessage, ResponsesRequest
 from ..reasoning_policy import normalize_canonical_reasoning_effort
-from .common import (
-    EXTRA_CHAT_PASSTHROUGH_FIELDS,
-    is_openai_o_series,
-)
+from .constants import EXTRA_CHAT_PASSTHROUGH_FIELDS, is_openai_o_series
 from .content import instruction_text
 from .message_normalization import (
     _sanitize_chat_messages,

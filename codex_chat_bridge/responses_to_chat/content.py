@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..protocol.types import ResponsesInputItem
+
 
 def flatten_text_content(content: Any) -> str:
     """Flatten structured content to plain text."""
@@ -37,7 +39,7 @@ def instruction_text(value: Any) -> str:
     return str(value) if value is not None else ""
 
 
-def reasoning_item_text(item: dict[str, Any]) -> str:
+def reasoning_item_text(item: ResponsesInputItem) -> str:
     """Extract text from a Responses reasoning item."""
     summary = item.get("summary")
     if isinstance(summary, list):
