@@ -1,9 +1,11 @@
-import httpx
+from __future__ import annotations
+
 import logging
 import uuid
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+
+import httpx
+from fastapi import HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 from starlette.responses import Response as StarletteResponse
@@ -21,47 +23,13 @@ from ..transform_responses_to_chat import UnsupportedResponsesInputItemError, re
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
 from .errors import build_error_response, invalid_request_error
-from .middleware import RequestLogMiddleware
+from .lifespan import create_app, health_upstream_reachable
 from .policy import validate_effective_messages
 from ..metrics import concurrency_usage
 
 _logger = logging.getLogger("codex-chat-bridge")
-_access_logger = logging.getLogger("codex-chat-bridge.access")
-_health_upstream_reachable: bool | None = None
 
-
-@asynccontextmanager
-async def _bridge_lifespan(_app: FastAPI):
-    """Startup: configure logging, validate config, check upstream. Shutdown."""
-    global _health_upstream_reachable
-
-    # Ensure access logger has a handler if none configured
-    if not _access_logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        _access_logger.addHandler(handler)
-        _access_logger.setLevel(logging.INFO)
-
-    try:
-        from ..app import validate_config
-        validate_config()
-    except RuntimeError as exc:
-        _logger.error("Startup config validation failed: %s", exc)
-        raise
-    try:
-        models = await UpstreamClient(get_settings()).list_models()
-        _health_upstream_reachable = True
-        _logger.info("Upstream connectivity: ok (%d upstream models)", len(models))
-    except Exception as exc:
-        _health_upstream_reachable = False
-        _logger.warning("Upstream connectivity check failed: %s", exc)
-
-    yield
-    _logger.info("Shutdown complete.")
-
-
-app = FastAPI(title="codex-chat-bridge", version="0.4.0", lifespan=_bridge_lifespan)
-app.add_middleware(RequestLogMiddleware)
+app = create_app()
 
 
 @app.get("/health")
@@ -69,7 +37,7 @@ async def health() -> dict:
     return {
         "ok": True,
         "service": "codex-chat-bridge",
-        "upstream_reachable": _health_upstream_reachable,
+        "upstream_reachable": health_upstream_reachable,
     }
 
 
@@ -125,7 +93,6 @@ async def _create_response_core(payload: ResponsesRequest):
         # ---- previous_response_id 恢复 ----
         existing_messages, session_context, session_model = resolve_session(payload)
         if existing_messages is not None:
-            # 使用会话中的 model 作为 fallback
             if not resolved_model and session_model:
                 resolved_model = session_model
             tool_context = session_context  # already merged with new request tools
@@ -142,50 +109,22 @@ async def _create_response_core(payload: ResponsesRequest):
         if policy_error is not None:
             return policy_error
 
-        # ---- 为本次响应生成 bridge 级 response_id，用于 session 索引 ----
+        # ---- Bridge response_id for session indexing ----
         bridge_id = f"resp_bridge_{uuid.uuid4().hex[:12]}"
 
         client = UpstreamClient(settings)
+
+        # ---- Streaming paths ----
         if payload.stream:
             if settings.upstream_streaming:
-                captured: list = []
-                raw_stream = create_responses_sse_stream_from_chat_stream(
-                    client.stream_chat_completion(chat_request),
-                    tool_context,
-                    response_id=bridge_id,
-                    _captured_state=captured,
+                return await _stream_upstream_streaming(
+                    client, chat_request, tool_context, bridge_id,
                 )
-
-                async def _save_when_done() -> AsyncIterator[bytes]:
-                    saw_output = False
-                    async for chunk in raw_stream:
-                        saw_output = True
-                        yield chunk
-                    _assistant = captured[0].build_assistant_message() if captured else None
-                    if saw_output:
-                        save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
-                                     assistant_message=_assistant)
-
-                return StreamingResponse(_save_when_done(), media_type="text/event-stream")
-
-            # upstream_streaming=False, payload.stream=True: 先把 chat_body 拉回来再包装 SSE
-            chat_body = await client.create_chat_completion(chat_request)
-            raw_stream = create_responses_sse_from_chat_response(
-                chat_body, tool_context, response_id=bridge_id,
+            return await _stream_buffer_then_sse(
+                client, chat_request, tool_context, bridge_id,
             )
-            _assistant = _assistant_message_from_chat_body(chat_body)
 
-            async def _save_when_done() -> AsyncIterator[bytes]:
-                saw_output = False
-                async for chunk in raw_stream:
-                    saw_output = True
-                    yield chunk
-                if saw_output:
-                    save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
-                                 assistant_message=_assistant)  # type: ignore[possibly-undefined]
-
-            return StreamingResponse(_save_when_done(), media_type="text/event-stream")
-
+        # ---- Non-streaming path ----
         chat_body = await client.create_chat_completion(chat_request)
         response_body = chat_text_to_responses(chat_body, chat_request.model, tool_context)
         _assistant = _assistant_message_from_chat_body(chat_body)
@@ -194,9 +133,60 @@ async def _create_response_core(payload: ResponsesRequest):
         save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
                      assistant_message=_assistant)
         return JSONResponse(raw)
+
     except UnsupportedResponsesInputItemError as exc:
         return invalid_request_error(str(exc), "unsupported_input_item")
     except httpx.HTTPStatusError as exc:
         raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
     except Exception as exc:
         return build_error_response(str(exc), code="bridge_runtime_error", status_code=500)
+
+
+async def _stream_upstream_streaming(
+    client: UpstreamClient,
+    chat_request,
+    tool_context: BridgeToolContext,
+    bridge_id: str,
+) -> StreamingResponse:
+    """Stream: upstream supports streaming → passthrough SSE with session save."""
+    captured: list = []
+    raw_stream = create_responses_sse_stream_from_chat_stream(
+        client.stream_chat_completion(chat_request),
+        tool_context,
+        response_id=bridge_id,
+        _captured_state=captured,
+    )
+
+    async def _yield_and_save() -> AsyncIterator[bytes]:
+        saw_output = False
+        async for chunk in raw_stream:
+            saw_output = True
+            yield chunk
+        _assistant = captured[0].build_assistant_message() if captured else None
+        if saw_output:
+            save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
+                         assistant_message=_assistant)
+
+    return StreamingResponse(_yield_and_save(), media_type="text/event-stream")
+
+
+async def _stream_buffer_then_sse(
+    client: UpstreamClient,
+    chat_request,
+    tool_context: BridgeToolContext,
+    bridge_id: str,
+) -> StreamingResponse:
+    """Stream: upstream doesn't stream → buffer chat_body, wrap as SSE, save session."""
+    chat_body = await client.create_chat_completion(chat_request)
+    raw_stream = create_responses_sse_from_chat_response(
+        chat_body, tool_context, response_id=bridge_id,
+    )
+    _assistant = _assistant_message_from_chat_body(chat_body)
+
+    async def _yield_and_save() -> AsyncIterator[bytes]:
+        async for chunk in raw_stream:
+            yield chunk
+        save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
+                     assistant_message=_assistant)
+
+    return StreamingResponse(_yield_and_save(), media_type="text/event-stream")
