@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi.responses import JSONResponse
 
-from ..errors import BridgeError, InvalidRequestError
+from ..errors import BridgeError
 from ..models import ErrorBody, ErrorEnvelope
 
 

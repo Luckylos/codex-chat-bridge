@@ -13,8 +13,8 @@ from starlette.responses import Response as StarletteResponse
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
-from ..errors import BridgeError, InvalidRequestError
-from ..models import ChatMessage, ResponsesRequest
+from ..errors import BridgeError
+from ..models import ResponsesRequest
 from ..protocol.session import _assistant_message_from_chat_body, resolve_session, save_session
 from ..stream_chat_to_responses import (
     create_responses_sse_from_chat_response,

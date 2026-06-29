@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..bridge_context import canonical_json_string, iter_request_input_items
-from ..models import ChatMessage, ResponsesRequest
+from ..bridge_context import iter_request_input_items
+from ..models import ResponsesRequest
 from .content import flatten_text_content
 from .errors import UnsupportedResponsesInputItemError
 from .media import chat_image_part_from_input_item, chat_audio_part_from_input_item

@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments
+from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments, canonical_json_string
 from ..models import ChatMessage, ResponsesRequest
 from ..tool_arguments import canonicalize_tool_arguments
 from .content import reasoning_item_text, normalize_tool_output_content
 from .media import chat_image_part_from_input_item, chat_audio_part_from_input_item
 from .common import (
-    canonical_json_string,
     chat_message_content_from_response_content,
     iter_input_items,
 )

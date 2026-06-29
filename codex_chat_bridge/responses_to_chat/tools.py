@@ -5,7 +5,6 @@ from typing import Any
 from ..bridge_context import BridgeToolContext
 from ..models import ChatMessage
 from ..tool_arguments import canonicalize_tool_arguments
-from .errors import UnsupportedResponsesInputItemError
 
 
 def normalize_message_tool_calls(value: Any, tool_context: BridgeToolContext) -> list[dict[str, Any]] | None:

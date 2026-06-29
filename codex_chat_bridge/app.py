@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from .config import Settings, get_settings
+from .config import get_settings
 from .upstream import UpstreamClient
 
 _logger = logging.getLogger("codex-chat-bridge")

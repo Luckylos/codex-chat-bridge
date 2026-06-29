@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .text import _strip_inline_think_from_content
+
 
 def extract_message_annotations(message: dict[str, Any]) -> list[dict[str, Any]]:
     """Extract annotations from the Chat Completions message top-level field.
@@ -31,8 +33,6 @@ def message_content_parts(message: dict[str, Any]) -> list[dict[str, Any]]:
     Merges message-level annotations into each output_text part, deduplicating
     against any part-level annotations already present.
     """
-    from .text import _strip_inline_think_from_content
-
     content: list[dict[str, Any]] = []
     raw_content = message.get("content")
 

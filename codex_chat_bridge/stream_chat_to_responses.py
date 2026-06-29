@@ -5,7 +5,6 @@ import json
 from typing import Any
 
 from .bridge_context import BridgeToolContext
-from .models import ChatMessage
 from .protocol.sse import extract_block, parse_sse_block
 from .stream_responses_state import ResponsesStreamState
 

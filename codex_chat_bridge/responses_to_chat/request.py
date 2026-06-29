@@ -6,7 +6,6 @@ from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, build_to
 from ..models import ChatCompletionsRequest, ChatMessage, ResponsesRequest
 from ..reasoning_policy import normalize_canonical_reasoning_effort
 from .common import (
-    BUILT_IN_RESPONSES_TOOLS,
     EXTRA_CHAT_PASSTHROUGH_FIELDS,
     is_openai_o_series,
 )
@@ -15,7 +14,6 @@ from .message_normalization import (
     _sanitize_chat_messages,
     collapse_system_messages_to_head,
 )
-from .errors import UnsupportedResponsesInputItemError
 from .items import append_input_items_as_chat_messages
 
 
