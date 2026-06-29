@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..bridge_context import custom_tool_input_from_chat_arguments, parse_tool_arguments_object
+from ..bridge_context import BridgeToolContext, custom_tool_input_from_chat_arguments, parse_tool_arguments_object
 from ..tool_arguments import canonicalize_tool_arguments
 
 
@@ -32,7 +32,7 @@ class ToolKind:
         return "function_call"
 
 
-def resolve_tool_kind(tool_context, name: str | None) -> ToolKind:
+def resolve_tool_kind(tool_context: BridgeToolContext, name: str | None) -> ToolKind:
     return ToolKind(
         is_custom=tool_context.is_custom_tool(name),
         is_tool_search=tool_context.is_tool_search(name),
