@@ -1,4 +1,4 @@
-"""Reasoning 状态机 — 跟踪推理块的累积与最终确定。"""
+"""Reasoning state machine — tracks accumulation and finalization of reasoning blocks."""
 
 from __future__ import annotations
 

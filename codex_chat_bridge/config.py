@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import logging
 import os
 from typing import Any
@@ -33,12 +33,7 @@ def _int_env(key: str, default: int) -> int:
     return int(raw)
 
 
-_UNSET: object = object()
-
-# TODO: Reintroduce a public bridge URL setting only when a runtime feature
-# actually consumes externally routable bridge URLs.
-
-# Canonical env var → field mapping.
+# Canonical env var → Settings field mapping.
 _ENV_MAP: dict[str, str] = {
     "BRIDGE_UPSTREAM_BASE_URL": "upstream_base_url",
     "BRIDGE_UPSTREAM_API_KEY": "upstream_api_key",
@@ -49,63 +44,80 @@ _ENV_MAP: dict[str, str] = {
     "BRIDGE_UNSUPPORTED_TOOL_POLICY": "unsupported_tool_policy",
 }
 
-# Type-specific loaders keyed by field name.
-_LOADERS: dict[str, type] = {
-    "upstream_base_url": str,
-    "upstream_api_key": str,
-    "upstream_timeout_seconds": float,
-    "upstream_streaming": bool,
-    "upstream_max_retries": int,
-    "max_concurrent_requests": int,
-    "unsupported_tool_policy": str,
-}
+
+class _UnsetSentinel:
+    """Singleton sentinel distinguishing 'not provided' from None or empty.
+
+    Stored in the ``_explicitly_set`` set when a caller passes a value
+    explicitly to ``Settings(...)`` — this lets __post_init__ skip
+    env-var loading for those fields.
+    """
+
+    _instance: _UnsetSentinel | None = None
+
+    def __new__(cls) -> _UnsetSentinel:
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __repr__(self) -> str:
+        return "UNSET"
+
+
+UNSET = _UnsetSentinel()
+
+
+def _env_value(field: str) -> Any:
+    """Load a field value from its canonical env var, applying defaults."""
+    env_key = next(k for k, v in _ENV_MAP.items() if v == field)
+
+    if field == "upstream_base_url":
+        return _str_env(env_key, "").rstrip("/")
+    if field == "upstream_api_key":
+        return _str_env(env_key, "")
+    if field == "upstream_timeout_seconds":
+        return _float_env(env_key, 60.0)
+    if field == "upstream_streaming":
+        return _bool_env(env_key, True)
+    if field == "upstream_max_retries":
+        return _int_env(env_key, 2)
+    if field == "max_concurrent_requests":
+        return _int_env(env_key, 20)
+    if field == "unsupported_tool_policy":
+        return _str_env(env_key, "ignore").strip().lower()
+
+    raise ValueError(f"Unknown settings field: {field}")
 
 
 @dataclass(slots=True)
 class Settings:
-    upstream_base_url: str = _UNSET  # type: ignore[assignment]
-    upstream_api_key: str = _UNSET  # type: ignore[assignment]
-    upstream_timeout_seconds: float = _UNSET  # type: ignore[assignment]
-    upstream_streaming: bool = _UNSET  # type: ignore[assignment]
-    upstream_max_retries: int = _UNSET  # type: ignore[assignment]
-    max_concurrent_requests: int = _UNSET  # type: ignore[assignment]
-    unsupported_tool_policy: str = _UNSET  # type: ignore[assignment]
+    """Bridge configuration derived from env vars with explicit-override support.
+
+    Fields default to the UNSET sentinel.  ``__post_init__`` replaces any
+    UNSET field with its env-var derived value.  Callers that pass an
+    explicit value (including None or empty string) bypass env loading
+    for that field.
+    """
+
+    upstream_base_url: str | _UnsetSentinel = field(default_factory=lambda: UNSET)
+    upstream_api_key: str | _UnsetSentinel = field(default_factory=lambda: UNSET)
+    upstream_timeout_seconds: float | _UnsetSentinel = field(default_factory=lambda: UNSET)
+    upstream_streaming: bool | _UnsetSentinel = field(default_factory=lambda: UNSET)
+    upstream_max_retries: int | _UnsetSentinel = field(default_factory=lambda: UNSET)
+    max_concurrent_requests: int | _UnsetSentinel = field(default_factory=lambda: UNSET)
+    unsupported_tool_policy: str | _UnsetSentinel = field(default_factory=lambda: UNSET)
+
+    _explicitly_set: set[str] = field(default_factory=set, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        for env_key, field in _ENV_MAP.items():
-            current = getattr(self, field)
-            if current is not _UNSET:
-                # Explicit value — keep it, don't overwrite from env.
-                continue
-            loader = _LOADERS[field]
-            default = self._field_default(field)
-            if loader is bool:
-                value = _bool_env(env_key, default)  # type: ignore[arg-type]
-            elif loader is float:
-                value = _float_env(env_key, default)  # type: ignore[arg-type]
-            elif loader is int:
-                value = _int_env(env_key, default)  # type: ignore[arg-type]
+        for field_name in _ENV_MAP.values():
+            current = getattr(self, field_name)
+            if isinstance(current, _UnsetSentinel):
+                object.__setattr__(self, field_name, _env_value(field_name))
             else:
-                value = _str_env(env_key, default)  # type: ignore[arg-type]
-                if field == "upstream_base_url":
-                    value = value.rstrip("/")
-                if field == "unsupported_tool_policy":
-                    value = value.strip().lower()
-            object.__setattr__(self, field, value)
-
-    @staticmethod
-    def _field_default(field: str) -> Any:
-        """Canonical defaults for fields not explicitly set and not in env."""
-        _DEFAULTS: dict[str, Any] = {
-            "upstream_base_url": "",
-            "upstream_api_key": "",
-            "upstream_timeout_seconds": 60.0,
-            "upstream_streaming": True,
-            "upstream_max_retries": 2,
-            "max_concurrent_requests": 20,
-            "unsupported_tool_policy": "ignore",
-        }
-        return _DEFAULTS[field]
+                # Caller provided an explicit value — record it so get_settings()
+                # and validate_config() know this was not env-derived.
+                self._explicitly_set.add(field_name)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -132,6 +144,12 @@ def get_settings() -> Settings:
 def validate_config() -> None:
     """Validate core startup configuration before the first request."""
     settings = get_settings()
+
+    # After __post_init__, no field should still be UNSET.
+    assert not isinstance(settings.upstream_base_url, _UnsetSentinel)
+    assert not isinstance(settings.upstream_timeout_seconds, _UnsetSentinel)
+    assert not isinstance(settings.upstream_max_retries, _UnsetSentinel)
+    assert not isinstance(settings.max_concurrent_requests, _UnsetSentinel)
 
     if not settings.upstream_base_url:
         raise RuntimeError(

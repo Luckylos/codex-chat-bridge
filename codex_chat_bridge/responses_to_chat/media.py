@@ -51,7 +51,7 @@ def chat_image_part_from_input_item(item: ResponsesInputItem) -> ImageURLPart:
     image_value = item.get("image_url")
     if isinstance(image_value, str) and image_value:
         url = image_value
-        payload: ImageURLPart = {"url": url}  # type: ignore[typeddict-item]
+        payload: dict[str, object] = {"url": url}
     elif isinstance(image_value, dict) and isinstance(image_value.get("url"), str) and image_value.get("url"):
         url = image_value["url"]
         payload = dict(image_value)

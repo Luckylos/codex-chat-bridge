@@ -1,7 +1,9 @@
-"""会话存储 — 支持 previous_response_id 的有状态上下文管理。
+"""Session store — stateful context management for previous_response_id.
 
-保存 messages + tool_context 供后续请求恢复，实现 Responses API 的会话延续。
-当前为单进程内存存储，TTL 惰性清理。如需多进程/持久化，替换 _sessions 后端即可。
+Persists messages + tool_context for later request recovery, enabling
+Responses API session continuity.  Currently a single-process in-memory
+store with lazy TTL cleanup.  For multi-process/persistent backends,
+replace the _sessions backend.
 """
 
 from __future__ import annotations
@@ -9,6 +11,7 @@ from __future__ import annotations
 import copy
 import logging
 import time
+from typing import Literal, cast
 
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..models import ChatMessage, ResponsesRequest
@@ -17,10 +20,11 @@ _logger = logging.getLogger("codex-chat-bridge")
 
 
 class SessionRecord:
-    """一次 Responses 响应的状态快照。
+    """A state snapshot of a single Responses API response.
 
-    messages 和 tool_context 在构造时做深拷贝，确保后续
-    请求对同一 response_id 的修改不会变异已持久化的历史。
+    messages and tool_context are deep-copied on construction, ensuring
+    that subsequent requests for the same response_id cannot mutate
+    the persisted history.
     """
 
     __slots__ = ("messages", "tool_context", "model", "created_at", "last_accessed_at")
@@ -44,7 +48,7 @@ _DEFAULT_TTL = 3600  # 1 hour
 
 
 class SessionStore:
-    """In-memory 会话存储，按 response_id 索引。"""
+    """In-memory session store, indexed by response_id."""
 
     def __init__(self, ttl: int = _DEFAULT_TTL, max_sessions: int = 500) -> None:
         self._ttl = ttl
@@ -56,7 +60,7 @@ class SessionStore:
     # ------------------------------------------------------------------
 
     def get(self, response_id: str) -> SessionRecord | None:
-        """查询会话，过期条目视为不存在。访问时自动续期 TTL。"""
+        """Look up a session; expired entries are treated as missing. Access renews the TTL."""
         record = self._sessions.get(response_id)
         if record is None:
             return None
@@ -74,7 +78,7 @@ class SessionStore:
         return returned
 
     def save(self, response_id: str, record: SessionRecord) -> None:
-        """保存会话状态，同时触发惰性清理。
+        """Save session state, triggering lazy cleanup.
 
         Constructs a new SessionRecord (which deep-copies) so the stored
         data is fully isolated from the caller's references.  This way
@@ -95,33 +99,33 @@ class SessionStore:
         self._cleanup()
 
     def _cleanup(self) -> None:
-        """惰性清理过期条目（每次 get/save 触发）。"""
+        """Lazy cleanup of expired entries (triggered on each get/save)."""
         now = time.time()
         stale = [rid for rid, rec in self._sessions.items() if now - rec.last_accessed_at > self._ttl]
         for rid in stale:
             del self._sessions[rid]
 
     def _enforce_cap(self) -> None:
-        """超出上限时淘汰最旧条目（非过期）。"""
+        """Evict the oldest (non-expired) entry when the cap is exceeded."""
         while len(self._sessions) > self._max_sessions:
             oldest = min(self._sessions.items(), key=lambda kv: kv[1].last_accessed_at)[0]
             del self._sessions[oldest]
 
     @property
     def active_count(self) -> int:
-        """当前活跃会话数（调试/监控用）。"""
+        """Current number of active sessions (for debugging/monitoring)."""
         return len(self._sessions)
 
 
 # ------------------------------------------------------------------
-# 桥接助手 — 整合 session 与 request 转换
+# Bridge helpers — integrating session with request conversion
 # ------------------------------------------------------------------
 
 _global_store: SessionStore | None = None
 
 
 def get_session_store() -> SessionStore:
-    """全局 session store 单例。"""
+    """Global session store singleton."""
     global _global_store
     if _global_store is None:
         _global_store = SessionStore()
@@ -135,7 +139,7 @@ def reset_session_store() -> None:
 
 
 def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
-    """从上游 Chat Completions 响应体中提取 assistant 消息，用于 session 持久化。"""
+    """Extract an assistant message from an upstream Chat Completions response body, for session persistence."""
     choice = (chat_body.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     if not message:
@@ -157,7 +161,7 @@ def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
         else:
             content = None
     return ChatMessage(
-        role=role,  # type: ignore[arg-type]
+        role=cast(Literal["system", "user", "assistant", "tool"], role),
         content=content,
         tool_calls=tool_calls if isinstance(tool_calls, list) else None,
         reasoning_content=reasoning_content if isinstance(reasoning_content, str) else None,
@@ -181,10 +185,10 @@ def _merge_tool_contexts(
 def resolve_session(
     payload: ResponsesRequest,
 ) -> tuple[list[ChatMessage] | None, BridgeToolContext | None, str | None]:
-    """解析 previous_response_id，返回 (existing_messages, tool_context, model) 或 (None, None, None)。
+    """Resolve previous_response_id, returning (existing_messages, tool_context, model) or (None, None, None).
 
-    返回的 messages 是会话已保存的完整历史（深拷贝，可安全修改）。
-    tool_context 已合并新请求的 tools。
+    The returned messages are the session's full saved history (deep-copied, safe to modify).
+    tool_context has been merged with the new request's tools.
     """
     prev_id = getattr(payload, "previous_response_id", None)
     if not prev_id:
@@ -208,10 +212,10 @@ def save_session(
     model: str,
     assistant_message: ChatMessage | None = None,
 ) -> None:
-    """保存会话快照。提供 assistant_message 时将其追加到 messages 后再持久化。
+    """Save a session snapshot. If assistant_message is provided, it is appended to messages before persisting.
 
-    SessionRecord 构造时会深拷贝 messages 和 tool_context，
-    所以此处可以安全地先修改再传入。
+    SessionRecord deep-copies messages and tool_context on construction,
+    so it is safe to modify them before passing them in.
     """
     saved_messages = [*messages, assistant_message] if assistant_message is not None else messages
     store = get_session_store()

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-
+from dataclasses import dataclass
+from typing import Any, Literal, cast
 from ..protocol.types import ChatToolCall, ResponsesInputItem
 
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments, canonical_json_string
@@ -245,7 +246,7 @@ def append_input_items_as_chat_messages(
             reasoning_content = item.get("reasoning_content") if isinstance(item.get("reasoning_content"), str) else None
             messages.append(
                 ChatMessage(
-                    role=chat_role,  # type: ignore[arg-type]  # validated to Literal set on line 241
+                    role=cast(Literal["system", "user", "assistant", "tool"], chat_role),
                     content=chat_message_content_from_response_content(item.get("content")),
                     tool_calls=tool_calls,
                     tool_call_id=tool_call_id,

@@ -52,11 +52,9 @@ class FakeResponse:
 
 
 class FakeAsyncClient:
-    response_queue: list[FakeResponse] = []
-    captured_requests: list[dict] = []
-
     def __init__(self, *args, **kwargs) -> None:
-        pass
+        self.response_queue: list[FakeResponse] = []
+        self.captured_requests: list[dict] = []
 
     async def __aenter__(self):
         return self
@@ -78,16 +76,14 @@ class FakeAsyncClient:
     async def aclose(self) -> None:
         return None
 
-    @classmethod
-    def reset(cls) -> None:
-        cls.response_queue = []
-        cls.captured_requests = []
+    def reset(self) -> None:
+        self.response_queue = []
+        self.captured_requests = []
 
-    @classmethod
-    def _next_response(cls) -> FakeResponse:
-        if not cls.response_queue:
+    def _next_response(self) -> FakeResponse:
+        if not self.response_queue:
             raise AssertionError("FakeAsyncClient.response_queue is empty")
-        return cls.response_queue.pop(0)
+        return self.response_queue.pop(0)
 
 
 class RetryLogicTests(unittest.TestCase):
@@ -124,7 +120,7 @@ class RetryLogicTests(unittest.TestCase):
 
 class UpstreamCompatRetryTests(unittest.TestCase):
     def setUp(self) -> None:
-        FakeAsyncClient.reset()
+        self.fake_client = FakeAsyncClient()
         self.client = UpstreamClient(Settings(
             upstream_base_url="https://newapi.example.com/v1",
             upstream_api_key="test-key",
@@ -142,48 +138,48 @@ class UpstreamCompatRetryTests(unittest.TestCase):
         return ChatCompletionsRequest.model_validate(body)
 
     def test_non_streaming_openai_like_effort_rejection_falls_back_to_provider_default(self) -> None:
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(400, text="Unsupported parameter(s): reasoning_effort"),
             FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
         ]
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             result = asyncio.run(self.client.create_chat_completion(self._payload("gpt-5", "high")))
 
         self.assertEqual(result["id"], "ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
-        self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[0])
+        self.assertNotIn("thinking", self.fake_client.captured_requests[1])
+        self.assertNotIn("reasoning_effort", self.fake_client.captured_requests[1])
 
     def test_non_streaming_glm_effort_rejection_falls_back_to_provider_default(self) -> None:
         # GLM now uses effort_only — same path as openai_like/deepseek.
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(400, text="Unsupported parameter(s): reasoning_effort"),
             FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
         ]
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             result = asyncio.run(self.client.create_chat_completion(self._payload("glm-5.2", "high")))
 
         self.assertEqual(result["id"], "ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
-        self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[0])
+        self.assertNotIn("thinking", self.fake_client.captured_requests[1])
+        self.assertNotIn("reasoning_effort", self.fake_client.captured_requests[1])
 
     def test_non_streaming_glm_no_thinking_in_initial_request(self) -> None:
         # GLM never sends thinking — only reasoning_effort.
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
         ]
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             result = asyncio.run(self.client.create_chat_completion(self._payload("glm-5.2", "high")))
 
         self.assertEqual(result["id"], "ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[0])
 
     def test_streaming_openai_like_effort_rejection_falls_back_to_provider_default(self) -> None:
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(400, text="Unsupported parameter(s): reasoning_effort"),
             FakeResponse(200, chunks=[b"chunk-1", b"chunk-2"]),
         ]
@@ -194,18 +190,18 @@ class UpstreamCompatRetryTests(unittest.TestCase):
                 parts.append(chunk)
             return b"".join(parts)
 
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             body = asyncio.run(collect())
 
         self.assertEqual(body, b"chunk-1chunk-2")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
-        self.assertNotIn("reasoning_effort", FakeAsyncClient.captured_requests[1])
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[0])
+        self.assertNotIn("thinking", self.fake_client.captured_requests[1])
+        self.assertNotIn("reasoning_effort", self.fake_client.captured_requests[1])
 
     def test_streaming_glm_none_uses_effort_only(self) -> None:
         # GLM with effort=none now sends reasoning_effort=none, not thinking.
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(200, chunks=[b"ok"]),
         ]
 
@@ -215,15 +211,15 @@ class UpstreamCompatRetryTests(unittest.TestCase):
                 parts.append(chunk)
             return b"".join(parts)
 
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             body = asyncio.run(collect())
 
         self.assertEqual(body, b"ok")
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "none")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "none")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[0])
 
     def test_streaming_keeps_non_reasoning_compat_rules(self) -> None:
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(400, text="Unsupported parameter(s): parallel_tool_calls"),
             FakeResponse(200, chunks=[b"ok"]),
         ]
@@ -240,20 +236,20 @@ class UpstreamCompatRetryTests(unittest.TestCase):
                 parts.append(chunk)
             return b"".join(parts)
 
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             body = asyncio.run(collect())
 
         self.assertEqual(body, b"ok")
-        self.assertTrue(FakeAsyncClient.captured_requests[0]["parallel_tool_calls"])
+        self.assertTrue(self.fake_client.captured_requests[0]["parallel_tool_calls"])
         # GLM uses effort_only — reasoning_effort without thinking
-        self.assertEqual(FakeAsyncClient.captured_requests[0]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[0])
-        self.assertNotIn("parallel_tool_calls", FakeAsyncClient.captured_requests[1])
-        self.assertEqual(FakeAsyncClient.captured_requests[1]["reasoning_effort"], "high")
-        self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[0])
+        self.assertNotIn("parallel_tool_calls", self.fake_client.captured_requests[1])
+        self.assertEqual(self.fake_client.captured_requests[1]["reasoning_effort"], "high")
+        self.assertNotIn("thinking", self.fake_client.captured_requests[1])
 
     def test_include_usage_retry_preserves_other_stream_options(self) -> None:
-        FakeAsyncClient.response_queue = [
+        self.fake_client.response_queue = [
             FakeResponse(400, text="Unsupported parameter(s): include_usage"),
             FakeResponse(200, chunks=[b"ok"]),
         ]
@@ -270,11 +266,11 @@ class UpstreamCompatRetryTests(unittest.TestCase):
                 parts.append(chunk)
             return b"".join(parts)
 
-        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
             body = asyncio.run(collect())
 
         self.assertEqual(body, b"ok")
         self.assertEqual(
-            FakeAsyncClient.captured_requests[1]["stream_options"],
+            self.fake_client.captured_requests[1]["stream_options"],
             {"include_usage": False, "extra": "keep-me"},
         )

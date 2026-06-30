@@ -10,10 +10,10 @@ from typing import Any
 
 
 def extract_block(buffer: str) -> tuple[str, str] | None:
-    """从 buffer 中提取第一个完整的 SSE frame block。
+    """Extract the first complete SSE frame block from buffer.
 
-    返回 (block, remaining_buffer) 或 None（没有完整帧）。
-    帧分隔符为连续两个换行 \\n\\n。
+    Returns (block, remaining_buffer) or None if no complete frame is found.
+    Frame delimiter is two consecutive newlines (\\n\\n).
     """
     marker = "\n\n"
     idx = buffer.find(marker)
@@ -23,9 +23,9 @@ def extract_block(buffer: str) -> tuple[str, str] | None:
 
 
 def parse_sse_block(block: str) -> tuple[str | None, str | None]:
-    """解析一个 SSE block，提取 event 类型和 data 内容。
+    """Parse an SSE block, extracting event type and data content.
 
-    返回 (event_name, data_string)，event_name 可能为空。
+    Returns (event_name, data_string). event_name may be None.
     """
     event_name: str | None = None
     data_parts: list[str] = []
@@ -43,9 +43,9 @@ def parse_sse_block(block: str) -> tuple[str | None, str | None]:
 
 
 def parse_sse_json_block(block: str) -> tuple[str | None, dict | None]:
-    """解析 SSE block 并尝试将 data 解析为 JSON。
+    """Parse an SSE block and attempt to parse its data as JSON.
 
-    返回 (event_name, parsed_json_dict) 或 (event_name, None)。
+    Returns (event_name, parsed_json_dict) or (event_name, None).
     """
     event, data = parse_sse_block(block)
     if data:
@@ -57,10 +57,10 @@ def parse_sse_json_block(block: str) -> tuple[str | None, dict | None]:
 
 
 def serialize_event(event: str | None, data: Any) -> bytes:
-    """将单个 SSE 事件序列化为字节流。
+    """Serialize a single SSE event to bytes.
 
-    如果 event 为 None 或空，不写 event: 行。
-    data 会被 JSON 序列化。
+    If event is None or empty, no event: line is written.
+    data is JSON-serialized.
     """
     parts: list[str] = []
     if event:
@@ -71,21 +71,22 @@ def serialize_event(event: str | None, data: Any) -> bytes:
 
 
 def sse_event(event: str, data: Any) -> bytes:
-    """快捷函数：生成一条带 event 名称的 SSE 事件。"""
+    """Convenience function: generate an SSE event with an event name."""
     return serialize_event(event, data)
 
 
 def sse_done() -> bytes:
-    """生成 SSE [DONE] 终止标记。"""
+    """Generate the SSE [DONE] termination marker."""
     return b"data: [DONE]\n\n"
 
 
 def iter_sse_bytes_as_list(
     chunks: list[str],
 ) -> list[tuple[str | None, dict | None]]:
-    """从 SSE chunk 列表解析出 (event, parsed_data) 列表。
+    """Parse an SSE chunk list into a list of (event, parsed_data) tuples.
 
-    用于测试和调试。生产环境使用 stream_chat_to_responses 序列化。
+    For testing and debugging. Production code should use
+    stream_chat_to_responses serialization.
     """
     result: list[tuple[str | None, dict | None]] = []
     buffer = ""
