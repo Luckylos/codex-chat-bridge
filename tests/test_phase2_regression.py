@@ -6,14 +6,17 @@ from typing import Any, cast
 from unittest.mock import patch
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
-from codex_chat_bridge.api import routes
+from codex_chat_bridge.api import response_service, routes
 from codex_chat_bridge.api.policy import message_has_semantic_content
 from codex_chat_bridge.api.routes import app
+from codex_chat_bridge.bridge_context import BridgeToolContext
 from codex_chat_bridge.config import Settings
-from codex_chat_bridge.errors import InvalidRequestError
+from codex_chat_bridge.errors import InvalidRequestError, UnsupportedInputItemError
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
+from codex_chat_bridge.protocol.session import _assistant_message_from_chat_body
 from codex_chat_bridge.stream_state.envelope import ResponseEnvelopeState
 from codex_chat_bridge.stream_state.message import MessageState
 
@@ -36,6 +39,10 @@ def _http_status_error(
     request = httpx.Request(method, url)
     response = httpx.Response(status_code, request=request, json=payload)
     return httpx.HTTPStatusError(f"HTTP {status_code}", request=request, response=response)
+
+
+async def _collect_stream_chunks(response) -> list[bytes]:
+    return [chunk async for chunk in response.body_iterator]
 
 
 def test_health_reads_upstream_reachable_from_request_app_state_dynamically() -> None:
@@ -77,9 +84,9 @@ def test_models_http_status_error_uses_bridge_error_envelope() -> None:
             "message": "catalog unavailable",
             "type": "upstream_error",
             "code": "upstream_models_unavailable",
+            "param": "{\"error\":{\"message\":\"catalog unavailable\"}}",
         }
     }
-    assert "detail" not in body
 
 
 def test_create_response_http_status_error_uses_bridge_error_envelope() -> None:
@@ -96,8 +103,8 @@ def test_create_response_http_status_error_uses_bridge_error_envelope() -> None:
             )
 
     client = TestClient(app)
-    with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-        "codex_chat_bridge.api.routes.UpstreamClient", FailingUpstreamClient,
+    with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+        "codex_chat_bridge.api.response_service.UpstreamClient", FailingUpstreamClient,
     ):
         response = client.post("/v1/responses", json={"model": "test-model", "input": "hello"})
 
@@ -108,9 +115,9 @@ def test_create_response_http_status_error_uses_bridge_error_envelope() -> None:
             "message": "rate limited",
             "type": "upstream_error",
             "code": "upstream_request_failed",
+            "param": "{\"error\":{\"message\":\"rate limited\"}}",
         }
     }
-    assert "detail" not in body
 
 
 def test_audio_only_message_counts_as_semantic_content() -> None:
@@ -125,7 +132,7 @@ def test_audio_only_message_counts_as_semantic_content() -> None:
 def test_create_response_core_rejects_n_greater_than_one_before_upstream() -> None:
     payload = ResponsesRequest(model="test-model", input="hello", n=2)
 
-    with patch("codex_chat_bridge.api.routes.UpstreamClient", side_effect=AssertionError("UpstreamClient should not be created")):
+    with patch("codex_chat_bridge.api.response_service.UpstreamClient", side_effect=AssertionError("UpstreamClient should not be created")):
         try:
             asyncio.run(routes._create_response_core(payload))
         except InvalidRequestError as exc:
@@ -150,10 +157,10 @@ def test_create_response_core_accepts_n_one_and_none() -> None:
                 "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
             }
 
-    with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-        "codex_chat_bridge.api.routes.UpstreamClient", AcceptingUpstreamClient,
-    ), patch("codex_chat_bridge.api.routes.resolve_session", return_value=(None, None, None)), patch(
-        "codex_chat_bridge.api.routes.save_session", lambda *args, **kwargs: None,
+    with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+        "codex_chat_bridge.api.response_service.UpstreamClient", AcceptingUpstreamClient,
+    ), patch("codex_chat_bridge.api.response_service.resolve_session", return_value=(None, None, None)), patch(
+        "codex_chat_bridge.api.response_service.save_session", lambda *args, **kwargs: None,
     ):
         for n in (1, None):
             payload = ResponsesRequest(model="test-model", input="hello", n=n)
@@ -184,3 +191,155 @@ def test_message_state_preserves_text_refusal_text_part_order_on_finalize() -> N
             ],
         }
     ]
+
+
+def test_response_envelope_preserves_bridge_response_id_when_metadata_has_upstream_id() -> None:
+    envelope = ResponseEnvelopeState(response_id="resp_bridge_abc123")
+
+    envelope.apply_metadata({"id": "chatcmpl_upstream", "model": "test-model", "created": 1710000000})
+
+    assert envelope.response_id == "resp_bridge_abc123"
+    assert envelope._upstream_response_id == "resp_chatcmpl_upstream"
+    assert envelope.model == "test-model"
+    assert envelope.created_at == 1710000000
+
+
+def test_stream_upstream_streaming_does_not_persist_failed_streams() -> None:
+    class DummyClient:
+        def stream_chat_completion(self, payload):
+            async def _unused():
+                if False:
+                    yield b""
+
+            return _unused()
+
+    class FakeState:
+        def __init__(self, status: str) -> None:
+            self.envelope = SimpleNamespace(completed=True, status=status)
+
+        def build_assistant_message(self) -> ChatMessage:
+            return ChatMessage(role="assistant", content="partial")
+
+    async def fake_stream(*args, _captured_state=None, **kwargs):
+        if _captured_state is not None:
+            _captured_state.append(FakeState("failed"))
+        yield b"data: {\"type\": \"response.failed\"}\n\n"
+
+    saves: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    chat_request = SimpleNamespace(messages=[], model="test-model")
+
+    with patch("codex_chat_bridge.api.response_service.create_responses_sse_stream_from_chat_stream", fake_stream):
+        response = asyncio.run(
+            response_service.stream_upstream_streaming(
+                DummyClient(),
+                chat_request,
+                BridgeToolContext(),
+                "resp_bridge_failed",
+                save_session_fn=lambda *args, **kwargs: saves.append((args, kwargs)),
+            )
+        )
+        asyncio.run(_collect_stream_chunks(response))
+
+    assert saves == []
+
+
+def test_stream_upstream_streaming_persists_successful_streams() -> None:
+    class DummyClient:
+        def stream_chat_completion(self, payload):
+            async def _unused():
+                if False:
+                    yield b""
+
+            return _unused()
+
+    assistant_message = ChatMessage(role="assistant", content="ok")
+
+    class FakeState:
+        def __init__(self, status: str) -> None:
+            self.envelope = SimpleNamespace(completed=True, status=status)
+
+        def build_assistant_message(self) -> ChatMessage:
+            return assistant_message
+
+    async def fake_stream(*args, _captured_state=None, **kwargs):
+        if _captured_state is not None:
+            _captured_state.append(FakeState("completed"))
+        yield b"data: {\"type\": \"response.completed\"}\n\n"
+
+    saves: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    chat_request = SimpleNamespace(messages=[], model="test-model")
+
+    with patch("codex_chat_bridge.api.response_service.create_responses_sse_stream_from_chat_stream", fake_stream):
+        response = asyncio.run(
+            response_service.stream_upstream_streaming(
+                DummyClient(),
+                chat_request,
+                BridgeToolContext(),
+                "resp_bridge_completed",
+                save_session_fn=lambda *args, **kwargs: saves.append((args, kwargs)),
+            )
+        )
+        asyncio.run(_collect_stream_chunks(response))
+
+    assert len(saves) == 1
+    args, kwargs = saves[0]
+    assert args[0] == "resp_bridge_completed"
+    assert kwargs["assistant_message"] == assistant_message
+
+
+def test_assistant_message_from_chat_body_preserves_refusal_only_turns() -> None:
+    message = _assistant_message_from_chat_body(
+        {"choices": [{"message": {"role": "assistant", "refusal": "No."}}]}
+    )
+
+    assert message is not None
+    assert message.role == "assistant"
+    assert message.content == "No."
+    assert message.reasoning_content is None
+
+
+def test_assistant_message_from_chat_body_preserves_reasoning_only_turns() -> None:
+    message = _assistant_message_from_chat_body(
+        {"choices": [{"message": {"role": "assistant", "reasoning_content": "thinking"}}]}
+    )
+
+    assert message is not None
+    assert message.role == "assistant"
+    assert message.content == ""
+    assert message.reasoning_content == "thinking"
+
+
+def test_hosted_tool_passthrough_policy_keeps_raw_tool() -> None:
+    context = BridgeToolContext()
+    tool = {"type": "web_search", "search_context_size": "low"}
+
+    with patch(
+        "codex_chat_bridge.bridge_context.context.get_settings",
+        return_value=Settings(unsupported_tool_policy="passthrough"),
+    ):
+        context.add_response_tool(tool)
+
+    assert context.chat_tools == [tool]
+
+
+def test_hosted_tool_reject_policy_raises_error() -> None:
+    context = BridgeToolContext()
+
+    with patch(
+        "codex_chat_bridge.bridge_context.context.get_settings",
+        return_value=Settings(unsupported_tool_policy="reject"),
+    ):
+        with pytest.raises(UnsupportedInputItemError):
+            context.add_response_tool({"type": "web_search"})
+
+
+def test_hosted_tool_ignore_policy_skips_tool() -> None:
+    context = BridgeToolContext()
+
+    with patch(
+        "codex_chat_bridge.bridge_context.context.get_settings",
+        return_value=Settings(unsupported_tool_policy="ignore"),
+    ):
+        context.add_response_tool({"type": "web_search"})
+
+    assert context.chat_tools == []

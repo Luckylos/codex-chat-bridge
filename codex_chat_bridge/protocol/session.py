@@ -115,9 +115,12 @@ def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
     role = message.get("role", "assistant")
     content = message.get("content")
     tool_calls = message.get("tool_calls")
+    refusal = message.get("refusal")
     reasoning_content = message.get("reasoning_content") or message.get("reasoning")
-    if not content and not tool_calls:
+    if not content and not tool_calls and not refusal and not reasoning_content:
         return None
+    if not content:
+        content = refusal or ""
     return ChatMessage(
         role=role,  # type: ignore[arg-type]
         content=content,

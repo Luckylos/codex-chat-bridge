@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass, field
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
@@ -62,19 +63,23 @@ def raise_upstream_status_error(exc: httpx.HTTPStatusError, *, code: str) -> Non
     ) from exc
 
 
+@dataclass(slots=True)
+class ServiceDependencies:
+    get_settings: Callable[[], Any] = field(default_factory=lambda: get_settings)
+    upstream_client_cls: type[Any] = field(default_factory=lambda: UpstreamClient)
+    resolve_session: Callable[..., Any] = field(default_factory=lambda: resolve_session)
+    save_session: Callable[..., Any] = field(default_factory=lambda: save_session)
+    raise_upstream_status_error: Callable[..., Any] = field(default_factory=lambda: raise_upstream_status_error)
+    stream_upstream_streaming: Callable[..., Any] = field(default_factory=lambda: stream_upstream_streaming)
+    stream_buffer_then_sse: Callable[..., Any] = field(default_factory=lambda: stream_buffer_then_sse)
+
+
 async def create_response_core(
     payload,
     *,
-    get_settings_fn: Callable = get_settings,
-    upstream_client_cls: type[UpstreamClient] = UpstreamClient,
-    resolve_session_fn: Callable = resolve_session,
-    save_session_fn: Callable = save_session,
-    raise_upstream_status_error_fn: Callable = raise_upstream_status_error,
-    stream_upstream_streaming_fn: Callable | None = None,
-    stream_buffer_then_sse_fn: Callable | None = None,
+    deps: ServiceDependencies | None = None,
 ):
-    stream_upstream_streaming_fn = stream_upstream_streaming_fn or stream_upstream_streaming
-    stream_buffer_then_sse_fn = stream_buffer_then_sse_fn or stream_buffer_then_sse
+    deps = deps or ServiceDependencies()
     try:
         resolved_model = (payload.model or "").strip()
         if not resolved_model:
@@ -91,8 +96,8 @@ async def create_response_core(
                 detail={"n": payload.n},
             )
 
-        settings = get_settings_fn()
-        existing_messages, session_context, _session_model = resolve_session_fn(payload)
+        settings = deps.get_settings()
+        existing_messages, session_context, _session_model = deps.resolve_session(payload)
         tool_context = session_context if existing_messages is not None else build_tool_context_from_request(payload)
         assert tool_context is not None
 
@@ -106,25 +111,25 @@ async def create_response_core(
 
         bridge_id = f"resp_bridge_{uuid.uuid4().hex[:12]}"
         original_request = payload.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
-        client = upstream_client_cls(settings)
+        client = deps.upstream_client_cls(settings)
 
         if payload.stream:
             if settings.upstream_streaming:
-                return await stream_upstream_streaming_fn(
+                return await deps.stream_upstream_streaming(
                     client,
                     chat_request,
                     tool_context,
                     bridge_id,
                     original_request=original_request,
-                    save_session_fn=save_session_fn,
+                    save_session_fn=deps.save_session,
                 )
-            return await stream_buffer_then_sse_fn(
+            return await deps.stream_buffer_then_sse(
                 client,
                 chat_request,
                 tool_context,
                 bridge_id,
                 original_request=original_request,
-                save_session_fn=save_session_fn,
+                save_session_fn=deps.save_session,
             )
 
         chat_body = await client.create_chat_completion(chat_request)
@@ -137,7 +142,7 @@ async def create_response_core(
         assistant_message = _assistant_message_from_chat_body(chat_body)
         raw = response_body.model_dump(mode="json")
         raw["id"] = bridge_id
-        save_session_fn(
+        deps.save_session(
             bridge_id,
             chat_request.messages,
             tool_context,
@@ -149,7 +154,7 @@ async def create_response_core(
     except BridgeError:
         raise
     except httpx.HTTPStatusError as exc:
-        raise_upstream_status_error_fn(exc, code="upstream_request_failed")
+        deps.raise_upstream_status_error(exc, code="upstream_request_failed")
     except Exception as exc:
         raise BridgeError(str(exc), code="bridge_runtime_error", status_code=500) from exc
 
@@ -178,8 +183,15 @@ async def stream_upstream_streaming(
         async for chunk in raw_stream:
             saw_output = True
             yield chunk
-        assistant_message = captured[0].build_assistant_message() if captured else None
-        if saw_output:
+        state = captured[0] if captured else None
+        assistant_message = state.build_assistant_message() if state is not None else None
+        should_save = (
+            saw_output
+            and state is not None
+            and state.envelope.completed
+            and state.envelope.status != "failed"
+        )
+        if should_save:
             save_session_fn(
                 bridge_id,
                 chat_request.messages,

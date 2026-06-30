@@ -15,7 +15,7 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from .stream_state import ResponsesStreamState
+    from .stream_responses_state import ResponsesStreamState
 
 
 class InlineThinkStateMachine:

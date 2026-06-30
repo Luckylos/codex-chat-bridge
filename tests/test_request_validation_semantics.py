@@ -39,8 +39,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 }
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
             response = client.post("/v1/responses", json={
                 "model": "test-model",
@@ -72,8 +72,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 }
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
             response = client.post("/v1/responses", json={
                 "model": "test-model",
@@ -122,8 +122,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 }
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
             response = client.post("/v1/responses", json={
                 "model": "test-model",
@@ -169,8 +169,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
         fake = FakeUpstream(None)
         fake.settings = None
 
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient", return_value=fake,
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient", return_value=fake,
         ):
             # First request
             resp_a = client.post("/v1/responses", json={
@@ -216,8 +216,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 }
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient", FakeUpstreamClient,
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
             response = client.post("/v1/responses", json={
                 "model": "test-model",
@@ -260,8 +260,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 raise AssertionError("UpstreamClient should not be instantiated for empty effective input")
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient",
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient",
             UpstreamShouldNotBeCalled,
         ):
             response = client.post(
@@ -286,8 +286,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 raise AssertionError("UpstreamClient should not be instantiated for blank effective input")
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient",
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient",
             UpstreamShouldNotBeCalled,
         ):
             response = client.post(
@@ -307,8 +307,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 raise AssertionError("UpstreamClient should not be instantiated when model is missing")
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient",
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient",
             UpstreamShouldNotBeCalled,
         ):
             response = client.post("/v1/responses", json={"input": "ping"})
@@ -343,8 +343,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 }
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient",
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient",
             FakeUpstreamClient,
         ):
             response = client.post(
@@ -392,8 +392,8 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                 }
 
         client = TestClient(app)
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient",
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient",
             FakeUpstreamClient,
         ):
             response = client.post(
@@ -442,8 +442,8 @@ class PreviousResponseIdIntegrationTests(unittest.TestCase):
         fake = FakeUpstream(None)
         fake.settings = None
 
-        with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
-            "codex_chat_bridge.api.routes.UpstreamClient", return_value=fake,
+        with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
+            "codex_chat_bridge.api.response_service.UpstreamClient", return_value=fake,
         ):
             # Request A
             resp_a = client.post("/v1/responses", json={

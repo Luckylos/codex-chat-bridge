@@ -7,8 +7,9 @@
 ## 快速开始
 
 ```bash
-pip install -r requirements.txt
-uvicorn codex_chat_bridge.app:app --host 127.0.0.1 --port 18090
+python3 -m venv .venv
+.venv/bin/pip install -e .
+.venv/bin/uvicorn codex_chat_bridge.app:app --host 127.0.0.1 --port 18090
 ```
 
 ## 环境变量
@@ -21,7 +22,7 @@ uvicorn codex_chat_bridge.app:app --host 127.0.0.1 --port 18090
 | `BRIDGE_UPSTREAM_STREAMING` | 是否以流式方式请求上游 | `true` |
 | `BRIDGE_UPSTREAM_MAX_RETRIES` | 400 兼容回退最大重试次数 | `2` |
 | `BRIDGE_MAX_CONCURRENT_REQUESTS` | 最大并发请求数 | `20` |
-| `BRIDGE_UNSUPPORTED_TOOL_POLICY` | 无法映射的 Responses 内置工具策略 | `ignore` |
+| `BRIDGE_UNSUPPORTED_TOOL_POLICY` | 无法映射的 Responses 内置工具策略（`ignore` / `reject` / `passthrough`） | `ignore` |
 | `BRIDGE_PUBLIC_BASE_URL` | 对外暴露地址 | `http://127.0.0.1:18090/v1` |
 
 ## 暴露的端点
@@ -35,14 +36,16 @@ uvicorn codex_chat_bridge.app:app --host 127.0.0.1 --port 18090
 ## 架构概览
 
 ```
-Responses client → /v1/responses → routes.py → responses_to_chat/ → upstream →
-                                                         ↑                      ↓
-                                              chat_to_responses/ ← Chat Completions response
-                                                         ↓
-                                              Responses SSE/JSON → client
+Responses client → /v1/responses → routes.py → response_service.py → responses_to_chat/ → upstream →
+                                                                            ↑                      ↓
+                                                                 chat_to_responses/ ← Chat Completions response
+                                                                            ↓
+                                                                 Responses SSE/JSON → client
 ```
 
 核心模块：
+- **`api/routes.py`** — 薄 HTTP 层：路由、并发门控、FastAPI 入口
+- **`api/response_service.py`** — 响应服务层：请求编排、会话解析、上游错误归一化、流式/非流式分发
 - **`responses_to_chat/`** — Responses→Chat 请求转换（13 文件，单职拆分）
 - **`chat_to_responses/`** — Chat→Responses 响应恢复（5 文件 + 对称 convert() 入口）
 - **`protocol/`** — SSE 解析、会话存储、TypedDict 类型定义
@@ -75,12 +78,13 @@ bridge 将调用方的 reasoning 强度归一化为四档 canonical effort：
 ## 功能边界
 
 - 非流式 + 流式 Responses ↔ Chat 双向转换
-- 文本 / 图片 / refusal / reasoning / function-call / custom-tool / tool-search 已覆盖
+- 文本 / 图片 / `input_audio` / refusal / reasoning / function-call / custom-tool / tool-search 已覆盖
 - `previous_response_id` 会话延续（messages 深拷贝隔离 + tool_context 合并）
+- Hosted Responses tools 行为可配置：`ignore` / `reject` / `passthrough`
 - 不做多上游路由、provider 管理、本地 CLI
 
 ## 测试
 
 ```bash
-python -m pytest tests/ -v    # 135 tests
+.venv/bin/python -m pytest tests/ -v    # 153 tests
 ```

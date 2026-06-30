@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import time
 
-from ..response_semantics import map_chat_usage
 from ..protocol.sse import sse_event
+from ..response_semantics import map_chat_usage
 
 
 class ResponseEnvelopeState:
@@ -20,11 +20,13 @@ class ResponseEnvelopeState:
         self.response_id = response_id or "resp_bridge"
         self.model = ""
         self.created_at = int(time.time())
+        self.status: str | None = None
         self.usage: dict | None = None
         self.finish_reason: str | None = None
         self.next_output_index = 0
         self.completed_items: list[tuple[int, dict]] = []
         self._request_echo: dict | None = None
+        self._upstream_response_id: str | None = None
 
     @property
     def message_item_id(self) -> str:
@@ -53,6 +55,7 @@ class ResponseEnvelopeState:
         return idx
 
     def base_response(self, status: str, output: list[dict]) -> dict:
+        self.status = status
         response = {
             "id": self.response_id,
             "object": "response",
@@ -82,11 +85,12 @@ class ResponseEnvelopeState:
         return [item for _, item in sorted(self.completed_items, key=lambda pair: pair[0])]
 
     def apply_metadata(self, payload: dict) -> None:
-        if payload.get("id"):
-            self.response_id = f"resp_{payload['id']}"
         if payload.get("model"):
             self.model = payload["model"]
         if payload.get("created"):
             self.created_at = payload["created"]
         if payload.get("usage"):
             self.usage = map_chat_usage(payload["usage"])
+        # Store upstream ID separately; do NOT overwrite bridge-generated response_id
+        if payload.get("id"):
+            self._upstream_response_id = f"resp_{payload['id']}"

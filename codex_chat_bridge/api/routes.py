@@ -10,26 +10,13 @@ from ..config import get_settings
 from ..errors import BridgeError, UpstreamError
 from ..metrics import concurrency_usage
 from ..models import ResponsesRequest
-from ..protocol.session import resolve_session, save_session
+from ..protocol.session import resolve_session
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
 from .lifespan import create_app
-from .response_service import (
-    create_response_core,
-    extract_upstream_error_detail,
-    extract_upstream_error_message,
-    raise_upstream_status_error,
-    stream_buffer_then_sse,
-    stream_upstream_streaming,
-)
+from .response_service import create_response_core, raise_upstream_status_error
 
 app = create_app()
-
-_extract_upstream_error_detail = extract_upstream_error_detail
-_extract_upstream_error_message = extract_upstream_error_message
-_raise_upstream_status_error = raise_upstream_status_error
-_stream_buffer_then_sse = stream_buffer_then_sse
-_stream_upstream_streaming = stream_upstream_streaming
 
 
 @app.get("/health")
@@ -52,7 +39,7 @@ async def list_models() -> JSONResponse:
         models = await UpstreamClient(get_settings()).list_models()
         return JSONResponse({"object": "list", "data": models})
     except httpx.HTTPStatusError as exc:
-        _raise_upstream_status_error(exc, code="upstream_models_unavailable")
+        raise_upstream_status_error(exc, code="upstream_models_unavailable")
     except BridgeError:
         raise
     except Exception as exc:
@@ -80,13 +67,4 @@ async def _create_response_impl(payload: ResponsesRequest):
 
 
 async def _create_response_core(payload: ResponsesRequest):
-    return await create_response_core(
-        payload,
-        get_settings_fn=get_settings,
-        upstream_client_cls=UpstreamClient,
-        resolve_session_fn=resolve_session,
-        save_session_fn=save_session,
-        raise_upstream_status_error_fn=_raise_upstream_status_error,
-        stream_upstream_streaming_fn=_stream_upstream_streaming,
-        stream_buffer_then_sse_fn=_stream_buffer_then_sse,
-    )
+    return await create_response_core(payload)

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..config import get_settings
+from ..errors import UnsupportedInputItemError
 from .constants import CUSTOM_TOOL_INPUT_FIELD, TOOL_SEARCH_PROXY_NAME
 from .models import ToolSpec
 from .naming import flatten_namespace_tool_name, tool_name_from_value
+
+_logger = logging.getLogger("codex-chat-bridge")
+_HOSTED_TOOL_TYPES = frozenset({"web_search", "file_search", "computer_use", "code_interpreter", "mcp"})
 
 
 @dataclass(slots=True)
@@ -66,6 +72,10 @@ class BridgeToolContext:
 
     def merge(self, other: BridgeToolContext) -> None:
         for chat_tool in other.chat_tools:
+            if isinstance(chat_tool, dict) and chat_tool.get("type") in _HOSTED_TOOL_TYPES:
+                if chat_tool not in self.chat_tools:
+                    self.chat_tools.append(chat_tool)
+                continue
             function = chat_tool.get("function") if isinstance(chat_tool, dict) else None
             chat_name = function.get("name") if isinstance(function, dict) else None
             if not isinstance(chat_name, str) or not chat_name.strip():
@@ -163,6 +173,19 @@ class BridgeToolContext:
         if not isinstance(tool, dict):
             return
         tool_type = tool.get("type")
+        if tool_type in _HOSTED_TOOL_TYPES:
+            policy = get_settings().unsupported_tool_policy
+            if policy in {"reject", "error"}:
+                raise UnsupportedInputItemError(
+                    f"Hosted Responses tool type '{tool_type}' is not supported by this bridge.",
+                    item_type=tool_type,
+                )
+            if policy == "passthrough":
+                if tool not in self.chat_tools:
+                    self.chat_tools.append(tool)
+                return
+            _logger.debug("Ignoring unsupported hosted tool type: %s", tool_type)
+            return
         if tool_type == "function":
             self.add_function_tool(tool)
         elif tool_type == "custom":
