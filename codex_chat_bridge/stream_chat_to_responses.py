@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 import json
-from typing import Any
 
 from .bridge_context import BridgeToolContext
 from .protocol.sse import extract_block, parse_sse_block

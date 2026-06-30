@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+import logging
 
 from ..protocol.types import ResponsesInputItem, ChatToolCallOutput
 
@@ -21,6 +21,8 @@ from .tools import (
 )
 from .errors import UnsupportedResponsesInputItemError
 from .orphan import has_matching_call
+
+_logger = logging.getLogger("codex-chat-bridge")
 
 
 def _existing_call_ids(messages: list[ChatMessage]) -> set[str]:
@@ -94,6 +96,7 @@ def append_input_items_as_chat_messages(
 
         if not isinstance(item, dict):
             _flush()
+            _logger.debug("Skipping non-dict responses input item: %r", item)
             continue
 
         item_type = item.get("type")
@@ -119,7 +122,8 @@ def append_input_items_as_chat_messages(
             _flush()
             try:
                 image_part = chat_image_part_from_input_item(item)
-            except UnsupportedResponsesInputItemError:
+            except UnsupportedResponsesInputItemError as exc:
+                _logger.debug("Skipping unsupported responses %s item: %s", item_type, exc)
                 continue
             messages.append(ChatMessage(role="user", content=[image_part]))
             continue
@@ -129,7 +133,8 @@ def append_input_items_as_chat_messages(
             _flush()
             try:
                 audio_part = chat_audio_part_from_input_item(item)
-            except UnsupportedResponsesInputItemError:
+            except UnsupportedResponsesInputItemError as exc:
+                _logger.debug("Skipping unsupported responses %s item: %s", item_type, exc)
                 continue
             messages.append(ChatMessage(role="user", content=[audio_part]))
             continue
@@ -231,8 +236,9 @@ def append_input_items_as_chat_messages(
             ensure_tool_call_reasoning_content(messages[-1])
             continue
 
-        # ---- Unknown item type → silently skip ----
+        # ---- Unknown item type → permissively skip, but log for visibility ----
         _flush()
+        _logger.debug("Skipping unsupported responses input item type: %r", item_type)
 
     flush_pending_tool_calls(messages, pending_tool_calls, pending_reasoning)
     backfill_tool_call_reasoning_content(messages)

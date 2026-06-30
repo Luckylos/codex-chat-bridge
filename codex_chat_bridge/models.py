@@ -2,17 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
-
-
-class ResponsesInputText(BaseModel):
-    type: Literal["input_text"] = "input_text"
-    text: str
-
-
-class ResponsesMessage(BaseModel):
-    role: Literal["user", "assistant", "system", "developer", "tool"]
-    content: Any | None = None
+from pydantic import BaseModel
 
 
 class ResponsesRequest(BaseModel):
@@ -80,17 +70,6 @@ class ChatCompletionsRequest(BaseModel):
     top_p: float | None = None
 
 
-class ModelCard(BaseModel):
-    id: str
-    object: Literal["model"] = "model"
-    owned_by: str = "codex-chat-bridge"
-
-
-class ModelsResponse(BaseModel):
-    object: Literal["list"] = "list"
-    data: list[ModelCard]
-
-
 class ErrorBody(BaseModel):
     message: str
     type: str = "bridge_error"
@@ -100,12 +79,6 @@ class ErrorBody(BaseModel):
 
 class ErrorEnvelope(BaseModel):
     error: ErrorBody
-
-
-class ResponsesOutputText(BaseModel):
-    type: Literal["output_text"] = "output_text"
-    text: str
-    annotations: list[Any] = Field(default_factory=list)
 
 
 class ResponsesResponse(BaseModel):

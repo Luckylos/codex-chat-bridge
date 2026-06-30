@@ -64,6 +64,26 @@ class BridgeToolContext:
         if spec.kind == "tool_search":
             self.tool_search_enabled = True
 
+    def merge(self, other: BridgeToolContext) -> None:
+        for chat_tool in other.chat_tools:
+            function = chat_tool.get("function") if isinstance(chat_tool, dict) else None
+            chat_name = function.get("name") if isinstance(function, dict) else None
+            if not isinstance(chat_name, str) or not chat_name.strip():
+                continue
+            spec = other.chat_name_to_spec.get(chat_name)
+            if spec is None:
+                continue
+            self.add_chat_tool(chat_name, spec, chat_tool)
+
+        for name in other.custom_tool_names:
+            self.custom_tool_names.add(name)
+            spec = other.chat_name_to_spec.get(name)
+            if spec is not None:
+                self.chat_name_to_spec.setdefault(name, spec)
+
+        if other.tool_search_enabled:
+            self.add_tool_search_tool()
+
     def add_function_tool(self, tool: dict[str, Any], namespace: str | None = None) -> None:
         function = tool.get("function") if isinstance(tool.get("function"), dict) else tool
         name = tool_name_from_value(function)

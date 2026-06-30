@@ -23,4 +23,4 @@ def bridge_error_response(exc: BridgeError) -> JSONResponse:
             code=exc.code,
         )
     )
-    return JSONResponse(status_code=exc.status_code, content=envelope.model_dump(mode="json"))
+    return JSONResponse(status_code=exc.status_code, content=envelope.model_dump(mode="json", exclude_none=True))

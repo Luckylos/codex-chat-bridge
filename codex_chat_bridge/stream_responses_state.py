@@ -61,12 +61,11 @@ class ResponsesStreamState:
         events: list[bytes] = []
         events.extend(self.envelope.ensure_started())
 
-        # Flush inline think state machine
         events.extend(self.inline_think.flush_on_finalize(self))
-
         events.extend(self.reasoning.finalize(self.envelope))
         events.extend(self.message.finalize(self.envelope))
         events.extend(self.tools.finalize(self.envelope))
+
         output = self.envelope.completed_output_items()
         if self.envelope.finish_reason is None:
             if output:
@@ -76,7 +75,12 @@ class ResponsesStreamState:
             else:
                 events.append(self.fail("Stream truncated before any output was produced", "stream_truncated"))
             return events
-        status = "incomplete" if self.envelope.finish_reason in ("length", "content_filter") else ("in_progress" if self.envelope.finish_reason == "tool_calls" else "completed")
+
+        status = (
+            "incomplete"
+            if self.envelope.finish_reason in ("length", "content_filter")
+            else ("in_progress" if self.envelope.finish_reason == "tool_calls" else "completed")
+        )
         response = self.envelope.base_response(status, output)
         if status == "incomplete":
             reason = "content_filter" if self.envelope.finish_reason == "content_filter" else "max_output_tokens"
@@ -86,7 +90,6 @@ class ResponsesStreamState:
 
     def fail(self, message: str, error_type: str = "stream_error") -> bytes:
         self.envelope.completed = True
-        # Finalize sub-modules so their output items appear in the failed response
         self.reasoning.finalize(self.envelope)
         self.message.finalize(self.envelope)
         self.tools.finalize(self.envelope)
@@ -95,29 +98,19 @@ class ResponsesStreamState:
         return sse_event("response.failed", {"type": "response.failed", "response": response})
 
     def build_assistant_message(self) -> ChatMessage | None:
-        """从流状态构建 assistant ChatMessage，用于 session 持久化。
-
-        Preserves full structured content (text + refusal parts) so that
-        previous_response_id continuations see the complete history.
-        """
+        """Build an assistant ChatMessage for session persistence."""
         tool_call_states = {k: v for k, v in self.tools.tool_calls.items() if v.name}
+        content_parts = self.message.content_parts()
+        has_visible_content = bool(content_parts) or bool(self.message.text)
 
-        # Build content from finalized parts — includes both text and refusal
-        has_parts = bool(self.message.parts)
-        has_unstructured_text = bool(self.message.text) and not has_parts
-
-        if not has_parts and not has_unstructured_text and not tool_call_states:
-            if self.reasoning.text:
-                # reasoning-only response: no visible content, keep empty content
-                pass
-            else:
+        if not has_visible_content and not tool_call_states:
+            if not self.reasoning.text:
                 return None
 
-        # If parts are present (stream was finalized), use structured content
-        if has_parts:
-            content: str | list[dict[str, Any]] | None = list(self.message.parts)
-        elif has_unstructured_text:
-            content = self.message.text or None
+        if content_parts:
+            content: str | list[dict[str, Any]] | None = content_parts
+        elif self.message.text:
+            content = self.message.text
         else:
             content = None
 
@@ -125,14 +118,16 @@ class ResponsesStreamState:
         if tool_call_states:
             chat_tool_calls = []
             for index, state in sorted(tool_call_states.items(), key=lambda pair: pair[0]):
-                chat_tool_calls.append({
-                    "id": state.call_id or f"call_{index}",
-                    "type": "function",
-                    "function": {
-                        "name": state.name,
-                        "arguments": state.arguments,
-                    },
-                })
+                chat_tool_calls.append(
+                    {
+                        "id": state.call_id or f"call_{index}",
+                        "type": "function",
+                        "function": {
+                            "name": state.name,
+                            "arguments": state.arguments,
+                        },
+                    }
+                )
 
         reasoning = self.reasoning.text.strip() or None
         return ChatMessage(

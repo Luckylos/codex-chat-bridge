@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import copy
 import time
-from typing import Any
 
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..models import ChatMessage, ResponsesRequest
@@ -60,12 +59,16 @@ class SessionStore:
         if time.time() - record.created_at > self._ttl:
             del self._sessions[response_id]
             return None
-        return record
+        return SessionRecord(record.messages, record.tool_context, record.model, created_at=record.created_at)
 
     def save(self, response_id: str, record: SessionRecord) -> None:
         """保存会话状态，同时触发惰性清理。"""
-        record.created_at = time.time()
-        self._sessions[response_id] = record
+        self._sessions[response_id] = SessionRecord(
+            record.messages,
+            record.tool_context,
+            record.model,
+            created_at=time.time(),
+        )
         self._enforce_cap()
         self._cleanup()
 
@@ -132,25 +135,9 @@ def _merge_tool_contexts(
     Preserves all tools from the previous session; adds new tools from
     the current request that aren't already registered.
     """
-    new_context = build_tool_context_from_request(payload)
-    # Add tools from the new request that aren't already in the session
-    for chat_tool in new_context.chat_tools:
-        fn_name = chat_tool.get("function", {}).get("name", "")
-        if fn_name and fn_name not in existing._seen_chat_names:
-            spec = new_context.chat_name_to_spec.get(fn_name)
-            if spec is not None:
-                existing.add_chat_tool(fn_name, spec, chat_tool)
-    # Propagate tool_search flag if the new request enables it
-    if new_context.tool_search_enabled and not existing.tool_search_enabled:
-        existing.add_tool_search_tool()
-    # Propagate custom tool names
-    for name in new_context.custom_tool_names - existing.custom_tool_names:
-        existing.custom_tool_names.add(name)
-        if name not in existing.chat_name_to_spec:
-            spec = new_context.chat_name_to_spec.get(name)
-            if spec is not None:
-                existing.chat_name_to_spec[name] = spec
-    return existing
+    merged = copy.deepcopy(existing)
+    merged.merge(build_tool_context_from_request(payload))
+    return merged
 
 
 def resolve_session(

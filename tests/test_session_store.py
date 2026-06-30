@@ -32,6 +32,28 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(got.messages[0].content, "hello")
         self.assertEqual(got.model, "test-model")
 
+    def test_get_returns_deep_copy(self) -> None:
+        ctx = BridgeToolContext()
+        ctx.add_tool_search_tool()
+        self.store.save(
+            "resp_copy",
+            SessionRecord(
+                messages=[ChatMessage(role="user", content="hello")],
+                tool_context=ctx,
+                model="test-model",
+            ),
+        )
+
+        got = self.store.get("resp_copy")
+        assert got is not None
+        got.messages.append(ChatMessage(role="user", content="mutated"))
+        got.tool_context.tool_search_enabled = False
+
+        fresh = self.store.get("resp_copy")
+        assert fresh is not None
+        self.assertEqual(len(fresh.messages), 1)
+        self.assertTrue(fresh.tool_context.tool_search_enabled)
+
     def test_get_nonexistent_returns_none(self) -> None:
         self.assertIsNone(self.store.get("resp_nope"))
 
@@ -174,3 +196,33 @@ class SessionToolMergeTests(unittest.TestCase):
         new_spec = merged_ctx.lookup_chat_name("new_tool")
         self.assertIsNotNone(old_spec)
         self.assertIsNotNone(new_spec)
+
+    def test_resolve_session_keeps_persisted_context_isolated(self) -> None:
+        store = get_session_store()
+        ctx = BridgeToolContext()
+        ctx.add_function_tool({"type": "function", "function": {"name": "old_tool", "parameters": {}}})
+        store.save(
+            "resp_merge_isolated",
+            SessionRecord(
+                messages=[ChatMessage(role="user", content="hi")],
+                tool_context=ctx,
+                model="m",
+            ),
+        )
+
+        payload = ResponsesRequest.model_validate({
+            "model": "m",
+            "previous_response_id": "resp_merge_isolated",
+            "input": "continue",
+            "tools": [{"type": "function", "function": {"name": "new_tool", "parameters": {}}}],
+        })
+        _msgs, merged_ctx, _model = resolve_session(payload)
+        assert merged_ctx is not None
+        self.assertIsNotNone(merged_ctx.lookup_chat_name("new_tool"))
+
+        merged_ctx.add_tool_search_tool()
+
+        stored = store.get("resp_merge_isolated")
+        assert stored is not None
+        self.assertIsNone(stored.tool_context.lookup_chat_name("new_tool"))
+        self.assertFalse(stored.tool_context.tool_search_enabled)

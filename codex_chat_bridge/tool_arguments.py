@@ -6,7 +6,6 @@ to ensure consistent JSON canonicalization of tool call arguments.
 from __future__ import annotations
 
 import json
-from typing import Any
 
 
 def canonicalize_tool_arguments(arguments: object) -> str:

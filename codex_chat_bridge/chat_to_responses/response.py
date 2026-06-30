@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..protocol.types import ChatResponseInput
-
 from ..bridge_context import BridgeToolContext
 from ..models import ResponsesResponse
-from ..response_semantics import map_chat_usage, response_status_from_finish_reason, incomplete_reason_from_finish_reason
-from .text import extract_reasoning_text, output_text_from_parts
+from ..protocol.types import ChatResponseInput
+from ..response_semantics import (
+    incomplete_reason_from_finish_reason,
+    map_chat_usage,
+    response_status_from_finish_reason,
+)
 from .annotations import message_content_parts
+from .text import extract_reasoning_text, output_text_from_parts
 from .tools import chat_tool_calls_to_response_items
 
 # Fields echoed from the original Responses request into the response object
@@ -45,15 +48,6 @@ def chat_text_to_responses(
 ) -> ResponsesResponse:
     choice = (chat_body.get("choices") or [{}])[0]
     message = choice.get("message") or {}
-    # When n>1, Chat returns multiple choices — the Responses API only supports
-    # a single response object, so we take the first choice and warn if others exist.
-    all_choices = chat_body.get("choices") or []
-    if len(all_choices) > 1:
-        import logging
-        logging.getLogger("codex-chat-bridge").warning(
-            "Chat Completions returned %d choices (n>1); Responses API only supports one response — using first choice",
-            len(all_choices),
-        )
     reasoning_text = extract_reasoning_text(message)
     response_id = chat_body.get("id") or "resp_bridge"
     model = chat_body.get("model") or fallback_model

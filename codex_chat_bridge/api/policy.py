@@ -2,8 +2,30 @@
 still carries meaningful content before forwarding to upstream."""
 from __future__ import annotations
 
+from typing import Any
+
 from ..errors import InvalidRequestError
 from ..models import ChatCompletionsRequest, ChatMessage
+
+
+def _has_nonblank_string(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def _image_part_has_semantic_content(part: dict[str, Any]) -> bool:
+    image_value = part.get("image_url")
+    if _has_nonblank_string(image_value):
+        return True
+    return isinstance(image_value, dict) and _has_nonblank_string(image_value.get("url"))
+
+
+def _audio_part_has_semantic_content(part: dict[str, Any]) -> bool:
+    audio_value = part.get("input_audio")
+    if isinstance(audio_value, dict):
+        return _has_nonblank_string(audio_value.get("url")) or _has_nonblank_string(audio_value.get("data"))
+
+    # Compatibility with any legacy normalized shape that still carries audio_url directly.
+    return _has_nonblank_string(part.get("audio_url"))
 
 
 def message_has_semantic_content(message: ChatMessage) -> bool:
@@ -19,15 +41,15 @@ def message_has_semantic_content(message: ChatMessage) -> bool:
     for part in content:
         if not isinstance(part, dict):
             continue
+
         part_type = part.get("type")
-        if part_type == "text" and isinstance(part.get("text"), str) and part["text"].strip():
+        if part_type == "text" and _has_nonblank_string(part.get("text")):
             return True
-        if part_type == "image_url":
-            image_value = part.get("image_url")
-            if isinstance(image_value, str) and image_value.strip():
-                return True
-            if isinstance(image_value, dict) and isinstance(image_value.get("url"), str) and image_value["url"].strip():
-                return True
+        if part_type == "image_url" and _image_part_has_semantic_content(part):
+            return True
+        if part_type == "input_audio" and _audio_part_has_semantic_content(part):
+            return True
+
     return False
 
 

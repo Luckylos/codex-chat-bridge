@@ -1,23 +1,58 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .envelope import ResponseEnvelopeState, sse_event
 
 
 class MessageState:
     def __init__(self) -> None:
-        self.text = ""
+        self.segments: list[dict[str, Any]] = []
         self.item_added = False
         self.item_done = False
         self.output_index: int | None = None
         self.parts: list[dict] = []
-        self.text_content_index: int | None = None
-        self.text_part_done = False
+        self.text_part_done: set[int] = set()
         self._annotations: list[dict] = []
 
+    @property
+    def text(self) -> str:
+        return "".join(
+            segment["text"]
+            for segment in self.segments
+            if segment.get("type") == "output_text"
+        )
+
     def add_annotations(self, annotations: list[dict] | None) -> None:
-        """Accumulate annotations from streaming content parts."""
-        if isinstance(annotations, list):
-            self._annotations.extend(a for a in annotations if isinstance(a, dict))
+        """Accumulate annotations for the current or next text segment."""
+        if not isinstance(annotations, list):
+            return
+
+        normalized = [annotation for annotation in annotations if isinstance(annotation, dict)]
+        if not normalized:
+            return
+
+        current_segment = self._current_text_segment()
+        if current_segment is not None:
+            current_segment["annotations"].extend(normalized)
+            return
+
+        self._annotations.extend(normalized)
+
+    def _current_text_segment(self) -> dict[str, Any] | None:
+        if not self.segments:
+            return None
+        last_segment = self.segments[-1]
+        if last_segment.get("type") != "output_text":
+            return None
+        if last_segment["content_index"] in self.text_part_done:
+            return None
+        return last_segment
+
+    def _drain_pending_annotations(self) -> list[dict]:
+        annotations = list(self._annotations)
+        self._annotations.clear()
+        return annotations
 
     def _ensure_message_item_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if self.item_added:
@@ -41,12 +76,19 @@ class MessageState:
             )
         ]
 
-    def _ensure_text_part_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
+    def _start_text_segment(self, envelope: ResponseEnvelopeState) -> tuple[dict[str, Any], list[bytes]]:
         events = self._ensure_message_item_started(envelope)
-        if self.text_content_index is not None:
-            return events
-        self.text_content_index = len(self.parts)
-        self.parts.append({"type": "output_text", "text": "", "annotations": []})
+        content_index = len(self.parts)
+        part = {"type": "output_text", "text": "", "annotations": []}
+        segment = {
+            "type": "output_text",
+            "content_index": content_index,
+            "text": "",
+            "annotations": self._drain_pending_annotations(),
+            "part": part,
+        }
+        self.segments.append(segment)
+        self.parts.append(part)
         events.append(
             sse_event(
                 "response.content_part.added",
@@ -54,18 +96,26 @@ class MessageState:
                     "type": "response.content_part.added",
                     "item_id": envelope.message_item_id,
                     "output_index": self.output_index,
-                    "content_index": self.text_content_index,
+                    "content_index": content_index,
                     "part": {"type": "output_text", "text": "", "annotations": []},
                 },
             )
         )
-        return events
+        return segment, events
 
     def push_text_delta(self, envelope: ResponseEnvelopeState, delta: str) -> list[bytes]:
-        if self.item_done:
+        if self.item_done or not delta:
             return []
-        events = self._ensure_text_part_started(envelope)
-        self.text += delta
+
+        segment = self._current_text_segment()
+        if segment is None:
+            segment, events = self._start_text_segment(envelope)
+        else:
+            events = self._ensure_message_item_started(envelope)
+            if self._annotations:
+                segment["annotations"].extend(self._drain_pending_annotations())
+
+        segment["text"] += delta
         events.append(
             sse_event(
                 "response.output_text.delta",
@@ -73,7 +123,7 @@ class MessageState:
                     "type": "response.output_text.delta",
                     "item_id": envelope.message_item_id,
                     "output_index": self.output_index,
-                    "content_index": self.text_content_index,
+                    "content_index": segment["content_index"],
                     "delta": delta,
                 },
             )
@@ -83,9 +133,16 @@ class MessageState:
     def push_refusal_part(self, envelope: ResponseEnvelopeState, refusal: str) -> list[bytes]:
         if not refusal or self.item_done:
             return []
+
         events = self._ensure_message_item_started(envelope)
         content_index = len(self.parts)
         part = {"type": "refusal", "refusal": refusal}
+        segment = {
+            "type": "refusal",
+            "content_index": content_index,
+            "part": part,
+        }
+        self.segments.append(segment)
         self.parts.append(part)
         events.append(
             sse_event(
@@ -113,15 +170,46 @@ class MessageState:
         )
         return events
 
+    def content_parts(self) -> list[dict]:
+        if self.item_done:
+            return list(self.parts)
+
+        rendered_parts: list[dict] = []
+        for segment in self.segments:
+            if segment.get("type") == "output_text":
+                rendered_parts.append(
+                    {
+                        "type": "output_text",
+                        "text": segment["text"],
+                        "annotations": list(segment["annotations"]),
+                    }
+                )
+            else:
+                rendered_parts.append(dict(segment["part"]))
+        return rendered_parts
+
     def finalize(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if not self.item_added or self.item_done:
             return []
+
         self.item_done = True
         events: list[bytes] = []
-        if self.text_content_index is not None and not self.text_part_done:
-            self.text_part_done = True
-            text_part = {"type": "output_text", "text": self.text, "annotations": list(self._annotations)}
-            self.parts[self.text_content_index] = text_part
+        for segment in self.segments:
+            if segment.get("type") != "output_text":
+                continue
+
+            content_index = segment["content_index"]
+            if content_index in self.text_part_done:
+                continue
+
+            self.text_part_done.add(content_index)
+            text_part = {
+                "type": "output_text",
+                "text": segment["text"],
+                "annotations": list(segment["annotations"]),
+            }
+            self.parts[content_index] = text_part
+            segment["part"] = text_part
             events.append(
                 sse_event(
                     "response.output_text.done",
@@ -129,8 +217,8 @@ class MessageState:
                         "type": "response.output_text.done",
                         "item_id": envelope.message_item_id,
                         "output_index": self.output_index,
-                        "content_index": self.text_content_index,
-                        "text": self.text,
+                        "content_index": content_index,
+                        "text": segment["text"],
                     },
                 )
             )
@@ -141,11 +229,12 @@ class MessageState:
                         "type": "response.content_part.done",
                         "item_id": envelope.message_item_id,
                         "output_index": self.output_index,
-                        "content_index": self.text_content_index,
+                        "content_index": content_index,
                         "part": text_part,
                     },
                 )
             )
+
         item = {
             "id": envelope.message_item_id,
             "type": "message",

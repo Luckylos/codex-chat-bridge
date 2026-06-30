@@ -3,41 +3,83 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
-from fastapi import HTTPException
+from fastapi import Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response as StarletteResponse
 
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
 from ..errors import BridgeError, InvalidRequestError, UpstreamError
+from ..metrics import concurrency_usage
 from ..models import ResponsesRequest
 from ..protocol.session import _assistant_message_from_chat_body, resolve_session, save_session
+from ..responses_to_chat import responses_to_chat_request
 from ..stream_chat_to_responses import (
     create_responses_sse_from_chat_response,
     create_responses_sse_stream_from_chat_stream,
 )
-from ..responses_to_chat import responses_to_chat_request
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
-from .lifespan import create_app, health_upstream_reachable
+from .lifespan import create_app
 from .policy import validate_effective_messages
-from ..metrics import concurrency_usage
 
 _logger = logging.getLogger("codex-chat-bridge")
 
 app = create_app()
 
 
+def _extract_upstream_error_detail(response: httpx.Response) -> Any:
+    try:
+        payload = response.json()
+    except Exception:
+        payload = None
+
+    if isinstance(payload, dict):
+        return payload
+
+    text = response.text.strip()
+    return text or None
+
+
+def _extract_upstream_error_message(response: httpx.Response) -> str:
+    detail = _extract_upstream_error_detail(response)
+    if isinstance(detail, dict):
+        error = detail.get("error")
+        if isinstance(error, dict):
+            message = error.get("message")
+            if isinstance(message, str) and message.strip():
+                return message
+        message = detail.get("message")
+        if isinstance(message, str) and message.strip():
+            return message
+
+    if isinstance(detail, str) and detail.strip():
+        return detail
+
+    return f"Upstream returned HTTP {response.status_code}"
+
+
+def _raise_upstream_status_error(exc: httpx.HTTPStatusError, *, code: str) -> None:
+    response = exc.response
+    raise UpstreamError(
+        _extract_upstream_error_message(response),
+        code=code,
+        status_code=response.status_code,
+        detail=_extract_upstream_error_detail(response),
+    ) from exc
+
+
 @app.get("/health")
-async def health() -> dict:
+async def health(request: Request) -> dict:
     return {
         "ok": True,
         "service": "codex-chat-bridge",
-        "upstream_reachable": health_upstream_reachable,
+        "upstream_reachable": getattr(request.app.state, "health_upstream_reachable", None),
     }
 
 
@@ -55,9 +97,15 @@ async def list_models() -> JSONResponse:
         models = await UpstreamClient(get_settings()).list_models()
         return JSONResponse({"object": "list", "data": models})
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        _raise_upstream_status_error(exc, code="upstream_models_unavailable")
+    except BridgeError:
+        raise
     except Exception as exc:
-        raise UpstreamError(str(exc), code="upstream_models_unavailable", status_code=502) from exc
+        raise UpstreamError(
+            str(exc),
+            code="upstream_models_unavailable",
+            status_code=502,
+        ) from exc
 
 
 @app.post("/v1/responses")
@@ -82,7 +130,6 @@ async def _create_response_impl(payload: ResponsesRequest):
 
 async def _create_response_core(payload: ResponsesRequest):
     try:
-        settings = get_settings()
         resolved_model = (payload.model or "").strip()
         if not resolved_model:
             raise InvalidRequestError(
@@ -90,60 +137,76 @@ async def _create_response_core(payload: ResponsesRequest):
                 code="missing_model",
             )
 
-        # ---- previous_response_id 恢复 ----
-        existing_messages, session_context, session_model = resolve_session(payload)
+        requested_n = payload.n if payload.n is not None else 1
+        if requested_n != 1:
+            raise InvalidRequestError(
+                "Responses requests with n != 1 are not supported by this bridge.",
+                code="unsupported_n",
+                detail={"n": payload.n},
+            )
+
+        settings = get_settings()
+
+        existing_messages, session_context, _session_model = resolve_session(payload)
         if existing_messages is not None:
-            if not resolved_model and session_model:
-                resolved_model = session_model
-            tool_context = session_context  # already merged with new request tools
+            tool_context = session_context
         else:
             tool_context = build_tool_context_from_request(payload)
 
-        assert tool_context is not None  # always set by one of the two branches
+        assert tool_context is not None
 
         chat_request = responses_to_chat_request(
-            payload, resolved_model, tool_context,
+            payload,
+            resolved_model,
+            tool_context,
             existing_messages=existing_messages,
         )
         validate_effective_messages(chat_request)
 
-        # ---- Bridge response_id for session indexing ----
         bridge_id = f"resp_bridge_{uuid.uuid4().hex[:12]}"
-
-        # ---- Build original request dict for echo-back in response ----
         original_request = payload.model_dump(mode="json", exclude_none=True, exclude_defaults=True)
-
         client = UpstreamClient(settings)
 
-        # ---- Streaming paths ----
         if payload.stream:
             if settings.upstream_streaming:
                 return await _stream_upstream_streaming(
-                    client, chat_request, tool_context, bridge_id,
+                    client,
+                    chat_request,
+                    tool_context,
+                    bridge_id,
                     original_request=original_request,
                 )
             return await _stream_buffer_then_sse(
-                client, chat_request, tool_context, bridge_id,
+                client,
+                chat_request,
+                tool_context,
+                bridge_id,
                 original_request=original_request,
             )
 
-        # ---- Non-streaming path ----
         chat_body = await client.create_chat_completion(chat_request)
         response_body = chat_text_to_responses(
-            chat_body, chat_request.model, tool_context,
+            chat_body,
+            chat_request.model,
+            tool_context,
             original_request=original_request,
         )
-        _assistant = _assistant_message_from_chat_body(chat_body)
+        assistant_message = _assistant_message_from_chat_body(chat_body)
         raw = response_body.model_dump(mode="json")
         raw["id"] = bridge_id
-        save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
-                     assistant_message=_assistant)
+        save_session(
+            bridge_id,
+            chat_request.messages,
+            tool_context,
+            chat_request.model,
+            assistant_message=assistant_message,
+        )
         return JSONResponse(raw)
 
     except BridgeError:
         raise
     except httpx.HTTPStatusError as exc:
-        raise HTTPException(status_code=exc.response.status_code, detail=exc.response.text) from exc
+        _raise_upstream_status_error(exc, code="upstream_request_failed")
     except Exception as exc:
         raise BridgeError(str(exc), code="bridge_runtime_error", status_code=500) from exc
 
@@ -170,10 +233,15 @@ async def _stream_upstream_streaming(
         async for chunk in raw_stream:
             saw_output = True
             yield chunk
-        _assistant = captured[0].build_assistant_message() if captured else None
+        assistant_message = captured[0].build_assistant_message() if captured else None
         if saw_output:
-            save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
-                         assistant_message=_assistant)
+            save_session(
+                bridge_id,
+                chat_request.messages,
+                tool_context,
+                chat_request.model,
+                assistant_message=assistant_message,
+            )
 
     return StreamingResponse(_yield_and_save(), media_type="text/event-stream")
 
@@ -188,15 +256,22 @@ async def _stream_buffer_then_sse(
     """Stream: upstream doesn't stream → buffer chat_body, wrap as SSE, save session."""
     chat_body = await client.create_chat_completion(chat_request)
     raw_stream = create_responses_sse_from_chat_response(
-        chat_body, tool_context, response_id=bridge_id,
+        chat_body,
+        tool_context,
+        response_id=bridge_id,
         original_request=original_request,
     )
-    _assistant = _assistant_message_from_chat_body(chat_body)
+    assistant_message = _assistant_message_from_chat_body(chat_body)
 
     async def _yield_and_save() -> AsyncIterator[bytes]:
         async for chunk in raw_stream:
             yield chunk
-        save_session(bridge_id, chat_request.messages, tool_context, chat_request.model,
-                     assistant_message=_assistant)
+        save_session(
+            bridge_id,
+            chat_request.messages,
+            tool_context,
+            chat_request.model,
+            assistant_message=assistant_message,
+        )
 
     return StreamingResponse(_yield_and_save(), media_type="text/event-stream")

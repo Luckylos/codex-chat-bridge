@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import os
 from typing import Any
+
+_logger = logging.getLogger("codex-chat-bridge")
 
 
 def _bool_env(key: str, default: bool) -> bool:
@@ -125,3 +128,35 @@ def get_settings() -> Settings:
     if _cached_settings is None:
         _cached_settings = Settings.from_env()
     return _cached_settings
+
+
+def validate_config() -> None:
+    """Validate core startup configuration before the first request."""
+    settings = get_settings()
+
+    if not settings.upstream_base_url:
+        raise RuntimeError(
+            "BRIDGE_UPSTREAM_BASE_URL is required but not set. "
+            "Example: BRIDGE_UPSTREAM_BASE_URL=https://newapi.example.com/v1"
+        )
+
+    if not settings.upstream_api_key:
+        _logger.warning("BRIDGE_UPSTREAM_API_KEY is not set — upstream requests will lack Bearer auth.")
+
+    if settings.upstream_timeout_seconds <= 0:
+        raise RuntimeError(f"BRIDGE_UPSTREAM_TIMEOUT_SECONDS must be > 0, got {settings.upstream_timeout_seconds}")
+
+    if settings.upstream_max_retries < 0:
+        raise RuntimeError(f"BRIDGE_UPSTREAM_MAX_RETRIES must be >= 0, got {settings.upstream_max_retries}")
+
+    if settings.max_concurrent_requests < 1:
+        raise RuntimeError(f"BRIDGE_MAX_CONCURRENT_REQUESTS must be >= 1, got {settings.max_concurrent_requests}")
+
+    upstream_url = settings.upstream_base_url.rstrip("/")
+    _logger.info(
+        "Config valid: upstream=%s timeout=%.0fs max_retries=%d concurrency=%d",
+        upstream_url,
+        settings.upstream_timeout_seconds,
+        settings.upstream_max_retries,
+        settings.max_concurrent_requests,
+    )
