@@ -23,7 +23,6 @@ python3 -m venv .venv
 | `BRIDGE_UPSTREAM_MAX_RETRIES` | 400 兼容回退最大重试次数 | `2` |
 | `BRIDGE_MAX_CONCURRENT_REQUESTS` | 最大并发请求数 | `20` |
 | `BRIDGE_UNSUPPORTED_TOOL_POLICY` | 无法映射的 Responses 内置工具策略（`ignore` / `reject` / `passthrough`） | `ignore` |
-| `BRIDGE_PUBLIC_BASE_URL` | 对外暴露地址 | `http://127.0.0.1:18090/v1` |
 
 ## 暴露的端点
 
@@ -46,12 +45,16 @@ Responses client → /v1/responses → routes.py → response_service.py → res
 核心模块：
 - **`api/routes.py`** — 薄 HTTP 层：路由、并发门控、FastAPI 入口
 - **`api/response_service.py`** — 响应服务层：请求编排、会话解析、上游错误归一化、流式/非流式分发
-- **`responses_to_chat/`** — Responses→Chat 请求转换（13 文件，单职拆分）
-- **`chat_to_responses/`** — Chat→Responses 响应恢复（5 文件 + 对称 convert() 入口）
+- **`responses_to_chat/`** — Responses→Chat 请求转换（单职拆分：items/content/media/tools/request/orphan/errors）
+- **`chat_to_responses/`** — Chat→Responses 响应恢复（对称 convert() 入口：response/text/tools/annotations/inline_think）
 - **`protocol/`** — SSE 解析、会话存储、TypedDict 类型定义
 - **`stream_state/`** — 流式状态机（envelope/message/reasoning/tools）
+- **`inline_think_sm.py`** — InlineThink 三态状态机（detecting→reasoning→text），独立于 MessageState
 - **`errors.py`** — BridgeError 异常层级，统一错误传播
 - **`bridge_context/`** — 请求级工具上下文（schema 注册、namespace 映射）
+- **`response_semantics.py`** — 共享响应语义 + REQUEST_ECHO_FIELDS 唯一定义
+- **`tool_arguments.py`** — canonicalize_tool_arguments（JSON 排序/归一化）
+- **`reasoning_policy.py`** — canonical effort 归一化 + provider bucket 分发
 
 详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
@@ -79,7 +82,7 @@ bridge 将调用方的 reasoning 强度归一化为四档 canonical effort：
 
 - 非流式 + 流式 Responses ↔ Chat 双向转换
 - 文本 / 图片 / `input_audio` / refusal / reasoning / function-call / custom-tool / tool-search 已覆盖
-- `previous_response_id` 会话延续（messages 深拷贝隔离 + tool_context 合并）
+- `previous_response_id` 会话延续（messages 深拷贝隔离 + tool_context 合并 + TTL 自动续期）
 - Hosted Responses tools 行为可配置：`ignore` / `reject` / `passthrough`
 - 不做多上游路由、provider 管理、本地 CLI
 
