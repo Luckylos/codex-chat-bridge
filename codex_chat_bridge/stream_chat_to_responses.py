@@ -55,7 +55,8 @@ async def create_responses_sse_stream_from_chat_stream(
         for event in state.finalize():
             yield event
     except Exception as exc:
-        yield state.fail(f"Stream error: {exc}")
+        for event in state.fail(f"Stream error: {exc}"):
+            yield event
     finally:
         if _captured_state is not None:
             _captured_state.append(state)
@@ -72,7 +73,7 @@ def _process_chat_chunk(
         err = payload.get("error") or payload
         message = err.get("message") if isinstance(err, dict) else str(err)
         error_type = err.get("type", "stream_error") if isinstance(err, dict) else "stream_error"
-        return [state.fail(message or "upstream stream error", error_type)]
+        return state.fail(message or "upstream stream error", error_type)
 
     state.apply_chunk_metadata(payload)
     events.extend(state.ensure_started())
@@ -94,6 +95,8 @@ def _process_chat_chunk(
         for tool_call in tool_calls:
             if isinstance(tool_call, dict):
                 events.extend(state.push_tool_call_delta(tool_call, reasoning_text or None))
+
+    state.message.add_annotations(delta.get("annotations"))
 
     content = delta.get("content")
     if isinstance(content, str) and content:
@@ -143,15 +146,16 @@ def _chat_message_to_fake_delta(chat_choice: dict) -> dict:
     delta: dict = {
         "content": message.get("content") or "",
         "role": "assistant",
+        "refusal": message.get("refusal"),
+        "annotations": message.get("annotations"),
+        "tool_calls": message.get("tool_calls"),
+        "reasoning_content": message.get("reasoning_content") or message.get("reasoning"),
     }
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, list):
         delta["tool_calls"] = [
             {**tc, "index": i} for i, tc in enumerate(tool_calls)
         ]
-    reasoning = message.get("reasoning_content") or message.get("reasoning")
-    if reasoning:
-        delta["reasoning_content"] = reasoning
     return delta
 
 

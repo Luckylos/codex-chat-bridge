@@ -4,7 +4,10 @@ import asyncio
 import json
 import unittest
 
-from codex_chat_bridge.stream_chat_to_responses import create_responses_sse_stream_from_chat_stream
+from codex_chat_bridge.stream_chat_to_responses import (
+    create_responses_sse_from_chat_response,
+    create_responses_sse_stream_from_chat_stream,
+)
 
 
 class StreamingContentRefusalSemanticsTests(unittest.TestCase):
@@ -96,6 +99,68 @@ class StreamingContentRefusalSemanticsTests(unittest.TestCase):
         self.assertIn('"refusal":"No."', compact)
         self.assertIn('"text":"Butsafealternative."', compact)
         self.assertIn('"type":"message"', compact)
+
+    def test_buffered_chat_response_preserves_top_level_refusal(self) -> None:
+        chat_body = {
+            "id": "chatcmpl_buffered_refusal",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "refusal": "No.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_from_chat_response(chat_body):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        output = asyncio.run(collect())
+        compact = output.replace(" ", "")
+        self.assertIn("event:response.content_part.added", compact)
+        self.assertIn("event:response.content_part.done", compact)
+        self.assertIn('"type":"refusal"', compact)
+        self.assertIn('"refusal":"No."', compact)
+
+    def test_buffered_chat_response_preserves_message_level_annotations(self) -> None:
+        chat_body = {
+            "id": "chatcmpl_buffered_annotations",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                        "annotations": [
+                            {"type": "url_citation", "url": "https://example.com"}
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_from_chat_response(chat_body):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        output = asyncio.run(collect())
+        compact = output.replace(" ", "")
+        self.assertIn("event:response.content_part.added", compact)
+        self.assertIn('"text":"Hello"', compact)
+        self.assertIn(
+            '"annotations":[{"type":"url_citation","url":"https://example.com"}]',
+            compact,
+        )
 
 
 if __name__ == "__main__":

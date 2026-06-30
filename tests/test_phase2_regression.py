@@ -26,7 +26,6 @@ def _single_upstream_settings() -> Settings:
         upstream_base_url="https://newapi.example.com/v1",
         upstream_api_key="test-key",
         upstream_timeout_seconds=30,
-        public_base_url="http://127.0.0.1:18090/v1",
     )
 
 
@@ -199,7 +198,6 @@ def test_response_envelope_preserves_bridge_response_id_when_metadata_has_upstre
     envelope.apply_metadata({"id": "chatcmpl_upstream", "model": "test-model", "created": 1710000000})
 
     assert envelope.response_id == "resp_bridge_abc123"
-    assert envelope._upstream_response_id == "resp_chatcmpl_upstream"
     assert envelope.model == "test-model"
     assert envelope.created_at == 1710000000
 

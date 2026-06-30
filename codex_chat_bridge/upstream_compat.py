@@ -41,7 +41,9 @@ def _include_usage_rejected(body: dict[str, Any], error_body: str) -> bool:
 
 
 def _apply_disable_include_usage(body: dict[str, Any]) -> dict[str, Any]:
-    return _rewrite_fields(body, stream_options={"include_usage": False})
+    opts = dict(body.get("stream_options") or {})
+    opts["include_usage"] = False
+    return _rewrite_fields(body, stream_options=opts)
 
 
 def _parallel_tool_calls_rejected(body: dict[str, Any], error_body: str) -> bool:

@@ -49,7 +49,7 @@ def ensure_tool_identity(state: ToolCallState, index: int, kind: ToolKind) -> No
 
 def build_in_progress_item(state: ToolCallState, kind: ToolKind) -> dict:
     item = {
-        "id": None if kind.is_tool_search else state.item_id,
+        "id": state.item_id,
         "type": kind.response_item_type,
         "status": "in_progress",
         "call_id": state.call_id,
@@ -81,6 +81,7 @@ def build_completed_item(state: ToolCallState, kind: ToolKind) -> tuple[dict, st
         return item, arguments, input_text
     if kind.is_tool_search:
         item = {
+            "id": state.item_id,
             "type": "tool_search_call",
             "status": "completed",
             "call_id": state.call_id,

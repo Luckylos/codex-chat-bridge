@@ -26,7 +26,6 @@ class ResponseEnvelopeState:
         self.next_output_index = 0
         self.completed_items: list[tuple[int, dict]] = []
         self._request_echo: dict | None = None
-        self._upstream_response_id: str | None = None
 
     @property
     def message_item_id(self) -> str:
@@ -91,6 +90,3 @@ class ResponseEnvelopeState:
             self.created_at = payload["created"]
         if payload.get("usage"):
             self.usage = map_chat_usage(payload["usage"])
-        # Store upstream ID separately; do NOT overwrite bridge-generated response_id
-        if payload.get("id"):
-            self._upstream_response_id = f"resp_{payload['id']}"

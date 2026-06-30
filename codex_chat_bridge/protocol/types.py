@@ -66,13 +66,30 @@ class ResponsesInputItem(TypedDict, total=False):
     status: str
 
 
-# ---- Chat Completions tool call (output product) ----
+# ---- Chat Completions tool call ----
 
-class ChatToolCallOutput(TypedDict, total=False):
-    """Shape of a Chat Completions tool_call object produced by the bridge."""
+class ChatToolCall(TypedDict, total=False):
+    """Shape of a Chat Completions tool_call object."""
     id: str
     type: Literal["function"]
     function: dict[str, Any]
+
+
+# ---- Responses API tool call output items ----
+
+class ResponsesToolCallItem(TypedDict, total=False):
+    """Shape of Responses API tool call output items produced by the bridge."""
+    type: Literal["function_call", "custom_tool_call", "tool_search_call"]
+    id: str
+    call_id: str
+    name: str
+    namespace: str
+    arguments: str | dict[str, Any]
+    input: str
+    output: Any
+    execution: str
+    reasoning_content: str
+    status: str
 
 
 # ---- Content parts (shared between both directions) ----

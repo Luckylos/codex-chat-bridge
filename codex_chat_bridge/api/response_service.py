@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from collections.abc import AsyncIterator, Callable
@@ -12,6 +13,7 @@ from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..chat_to_responses import chat_text_to_responses
 from ..config import get_settings
 from ..errors import BridgeError, InvalidRequestError, UpstreamError
+from ..metrics import upstream_errors_total
 from ..protocol.session import _assistant_message_from_chat_body, resolve_session, save_session
 from ..responses_to_chat import responses_to_chat_request
 from ..stream_chat_to_responses import (
@@ -20,6 +22,8 @@ from ..stream_chat_to_responses import (
 )
 from ..upstream import UpstreamClient
 from .policy import validate_effective_messages
+
+_logger = logging.getLogger("codex-chat-bridge")
 
 
 def extract_upstream_error_detail(response: httpx.Response) -> Any:
@@ -53,8 +57,13 @@ def extract_upstream_error_message(response: httpx.Response) -> str:
     return f"Upstream returned HTTP {response.status_code}"
 
 
-def raise_upstream_status_error(exc: httpx.HTTPStatusError, *, code: str) -> None:
+def _record_upstream_error(model: str | None, status_code: int | str) -> None:
+    upstream_errors_total.labels(model=(model or "unknown"), status_code=str(status_code)).inc()
+
+
+def raise_upstream_status_error(exc: httpx.HTTPStatusError, *, code: str, model: str | None = None) -> None:
     response = exc.response
+    _record_upstream_error(model, response.status_code)
     raise UpstreamError(
         extract_upstream_error_message(response),
         code=code,
@@ -86,11 +95,6 @@ async def create_response_core(
     deps = deps or ServiceDependencies()
     try:
         resolved_model = (payload.model or "").strip()
-        if not resolved_model:
-            raise InvalidRequestError(
-                "Responses request is missing required field: model.",
-                code="missing_model",
-            )
 
         requested_n = payload.n if payload.n is not None else 1
         if requested_n != 1:
@@ -101,7 +105,22 @@ async def create_response_core(
             )
 
         settings = deps.get_settings()
-        existing_messages, session_context, _session_model = deps.resolve_session(payload)
+        existing_messages, session_context, session_model = deps.resolve_session(payload)
+        session_model = (session_model or "").strip()
+        if not resolved_model and session_model:
+            resolved_model = session_model
+        elif resolved_model and session_model and resolved_model != session_model:
+            _logger.debug(
+                "Responses session model changed: previous_response_id=%s session_model=%s requested_model=%s",
+                payload.previous_response_id,
+                session_model,
+                resolved_model,
+            )
+        if not resolved_model:
+            raise InvalidRequestError(
+                "Responses request is missing required field: model.",
+                code="missing_model",
+            )
         tool_context = session_context if existing_messages is not None else build_tool_context_from_request(payload)
         assert tool_context is not None
 
@@ -158,7 +177,7 @@ async def create_response_core(
     except BridgeError:
         raise
     except httpx.HTTPStatusError as exc:
-        deps.raise_upstream_status_error(exc, code="upstream_request_failed")
+        deps.raise_upstream_status_error(exc, code="upstream_request_failed", model=resolved_model)
     except Exception as exc:
         raise BridgeError(str(exc), code="bridge_runtime_error", status_code=500) from exc
 

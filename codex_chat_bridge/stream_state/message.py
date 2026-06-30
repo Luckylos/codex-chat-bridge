@@ -79,12 +79,13 @@ class MessageState:
     def _start_text_segment(self, envelope: ResponseEnvelopeState) -> tuple[dict[str, Any], list[bytes]]:
         events = self._ensure_message_item_started(envelope)
         content_index = len(self.parts)
-        part = {"type": "output_text", "text": "", "annotations": []}
+        annotations = self._drain_pending_annotations()
+        part = {"type": "output_text", "text": "", "annotations": annotations}
         segment = {
             "type": "output_text",
             "content_index": content_index,
             "text": "",
-            "annotations": self._drain_pending_annotations(),
+            "annotations": annotations,
             "part": part,
         }
         self.segments.append(segment)
@@ -97,7 +98,7 @@ class MessageState:
                     "item_id": envelope.message_item_id,
                     "output_index": self.output_index,
                     "content_index": content_index,
-                    "part": {"type": "output_text", "text": "", "annotations": []},
+                    "part": {"type": "output_text", "text": "", "annotations": annotations},
                 },
             )
         )

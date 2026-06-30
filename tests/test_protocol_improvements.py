@@ -1,12 +1,9 @@
 
 """Tests for the 3 better-than-CodexPlusPlus improvements."""
 import unittest
-import sys
-sys.path.insert(0, "/opt/codex-chat-bridge")
 
 from codex_chat_bridge.models import ResponsesRequest
-from codex_chat_bridge.responses_to_chat.request import responses_to_chat_request
-from codex_chat_bridge.responses_to_chat.message_normalization import _sanitize_chat_messages
+from codex_chat_bridge.responses_to_chat import responses_to_chat_request
 from codex_chat_bridge.chat_to_responses.annotations import message_content_parts
 
 
@@ -57,7 +54,11 @@ class EmptyAssistantNormalizationTests(unittest.TestCase):
             ChatMessage(role="assistant", content=None),
             ChatMessage(role="tool", tool_call_id="call_1", content="result"),
         ]
-        result = _sanitize_chat_messages(messages)
+        result = responses_to_chat_request(
+            ResponsesRequest.model_validate({}),
+            "fallback-model",
+            existing_messages=messages,
+        ).messages
         # Assistant should survive with content=""
         assistant_msgs = [m for m in result if m.role == "assistant"]
         self.assertEqual(len(assistant_msgs), 1)
@@ -69,7 +70,11 @@ class EmptyAssistantNormalizationTests(unittest.TestCase):
             ChatMessage(role="user", content="hello"),
             ChatMessage(role="assistant", content=None, tool_calls=[{"id": "c1", "function": {"name": "f"}}]),
         ]
-        result = _sanitize_chat_messages(messages)
+        result = responses_to_chat_request(
+            ResponsesRequest.model_validate({}),
+            "fallback-model",
+            existing_messages=messages,
+        ).messages
         self.assertEqual(len(result), 2)
         self.assertIsNone(result[1].content)  # Keep original None when tool_calls exist
 

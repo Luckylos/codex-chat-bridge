@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..protocol.types import ChatMessageInput, ChatToolCallOutput
+from ..protocol.types import ChatMessageInput, ResponsesToolCallItem
 
 from ..bridge_context import BridgeToolContext, custom_tool_input_from_chat_arguments, parse_tool_arguments_object
 from ..tool_arguments import canonicalize_tool_arguments
@@ -12,11 +12,11 @@ def tool_call_to_response_item(
     arguments: object,
     reasoning: str,
     tool_context: BridgeToolContext,
-) -> ChatToolCallOutput:
+) -> ResponsesToolCallItem:
     canonical_arguments = canonicalize_tool_arguments(arguments)
     spec = tool_context.lookup_chat_name(name)
     if tool_context.is_tool_search(name):
-        item: ChatToolCallOutput = {
+        item: ResponsesToolCallItem = {
             "type": "tool_search_call",
             "status": "completed",
             "call_id": call_id,
@@ -52,8 +52,8 @@ def chat_tool_calls_to_response_items(
     message: ChatMessageInput,
     reasoning: str,
     tool_context: BridgeToolContext,
-) -> list[ChatToolCallOutput]:
-    output: list[ChatToolCallOutput] = []
+) -> list[ResponsesToolCallItem]:
+    output: list[ResponsesToolCallItem] = []
     tool_calls = message.get("tool_calls") or []
     if isinstance(tool_calls, list):
         for index, tool_call in enumerate(tool_calls):

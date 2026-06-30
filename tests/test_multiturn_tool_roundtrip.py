@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import unittest
-import os
 
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.responses_to_chat import responses_to_chat_request
@@ -228,6 +227,28 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         message = request.messages[0].model_dump(exclude_none=True)
         self.assertEqual(message["reasoning_content"], "tool call\n\nNeed weather first.")
 
+    def test_typed_function_call_reasoning_content_is_preserved(self) -> None:
+        payload = ResponsesRequest.model_validate(
+            {
+                "input": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_reasoning_1",
+                        "name": "get_weather",
+                        "arguments": {"city": "Tokyo"},
+                        "reasoning_content": "Need weather first.",
+                    }
+                ]
+            }
+        )
+
+        request = responses_to_chat_request(payload, "fallback-model")
+        message = request.messages[0].model_dump(exclude_none=True)
+
+        self.assertEqual(message["role"], "assistant")
+        self.assertEqual(message["reasoning_content"], "Need weather first.")
+        self.assertEqual(message["tool_calls"][0]["id"], "call_reasoning_1")
+
     def test_function_call_output_text_parts_are_flattened_before_upstream(self) -> None:
         payload = ResponsesRequest.model_validate(
             {
@@ -272,6 +293,16 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
         self.assertEqual(len(request.messages), 1)
         self.assertEqual(request.messages[0].role, "user")
         self.assertEqual(request.messages[0].content, "ping")
+
+    def test_typed_input_text_item_preserves_whitespace(self) -> None:
+        payload = ResponsesRequest.model_validate(
+            {"input": [{"type": "input_text", "text": "  keep me  "}]}
+        )
+
+        request = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(len(request.messages), 1)
+        self.assertEqual(request.messages[0].role, "user")
+        self.assertEqual(request.messages[0].content, "  keep me  ")
 
     def test_top_level_input_image_becomes_user_multimodal_message(self) -> None:
         payload = ResponsesRequest.model_validate(

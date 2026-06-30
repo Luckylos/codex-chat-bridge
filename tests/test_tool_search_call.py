@@ -11,6 +11,24 @@ from codex_chat_bridge.chat_to_responses import chat_text_to_responses
 from codex_chat_bridge.responses_to_chat import responses_to_chat_request
 
 
+def _parse_sse_events(output: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    event_name: str | None = None
+    data_lines: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].strip())
+        elif not line.strip() and event_name and data_lines:
+            events.append((event_name, json.loads("\n".join(data_lines))))
+            event_name = None
+            data_lines = []
+    if event_name and data_lines:
+        events.append((event_name, json.loads("\n".join(data_lines))))
+    return events
+
+
 class ToolSearchCallTests(unittest.TestCase):
     def test_responses_request_exposes_tool_search_and_loaded_namespace_tools(self) -> None:
         payload = ResponsesRequest.model_validate(
@@ -287,6 +305,95 @@ class ToolSearchCallTests(unittest.TestCase):
         self.assertIn('"call_id":"call_tool_search_1"', compact)
         self.assertIn('"query":"Gmailsearchemails"', compact.replace(" ", ""))
         self.assertIn('event:response.function_call_arguments.done', compact)
+
+    def test_stream_tool_search_call_announces_item_id_used_by_argument_events(self) -> None:
+        payload = ResponsesRequest.model_validate(
+            {
+                "model": "demo-model",
+                "tools": [{"type": "tool_search"}],
+                "input": "Search for Gmail tools.",
+            }
+        )
+        tool_context = build_tool_context_from_request(payload)
+
+        async def upstream_stream():
+            payloads = [
+                {
+                    "id": "chatcmpl_tool_search_ids",
+                    "model": "demo-model",
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call_tool_search_1",
+                                        "type": "function",
+                                        "function": {"name": TOOL_SEARCH_PROXY_NAME},
+                                    }
+                                ]
+                            }
+                        }
+                    ],
+                },
+                {
+                    "id": "chatcmpl_tool_search_ids",
+                    "model": "demo-model",
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "function": {
+                                            "arguments": '{"query":"Gmail search emails","limit":10}'
+                                        },
+                                    }
+                                ]
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                },
+            ]
+            for payload in payloads:
+                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_stream_from_chat_stream(
+                upstream_stream(), tool_context
+            ):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        events = _parse_sse_events(asyncio.run(collect()))
+        added_item = next(
+            payload["item"]
+            for event_name, payload in events
+            if event_name == "response.output_item.added"
+            and payload["item"].get("type") == "tool_search_call"
+        )
+        done_item = next(
+            payload["item"]
+            for event_name, payload in events
+            if event_name == "response.output_item.done"
+            and payload["item"].get("type") == "tool_search_call"
+        )
+        argument_event_ids = [
+            payload["item_id"]
+            for event_name, payload in events
+            if event_name in {
+                "response.function_call_arguments.delta",
+                "response.function_call_arguments.done",
+            }
+        ]
+
+        self.assertEqual(added_item["id"], "fc_call_tool_search_1")
+        self.assertEqual(done_item["id"], added_item["id"])
+        self.assertTrue(argument_event_ids)
+        self.assertTrue(all(item_id == added_item["id"] for item_id in argument_event_ids))
 
 
 if __name__ == "__main__":

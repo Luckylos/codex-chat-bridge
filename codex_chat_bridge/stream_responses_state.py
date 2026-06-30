@@ -73,7 +73,7 @@ class ResponsesStreamState:
                 response["incomplete_details"] = {"reason": "stream_truncated"}
                 events.append(sse_event("response.completed", {"type": "response.completed", "response": response}))
             else:
-                events.append(self.fail("Stream truncated before any output was produced", "stream_truncated"))
+                events.extend(self.fail("Stream truncated before any output was produced", "stream_truncated"))
             return events
 
         status = (
@@ -88,14 +88,18 @@ class ResponsesStreamState:
         events.append(sse_event("response.completed", {"type": "response.completed", "response": response}))
         return events
 
-    def fail(self, message: str, error_type: str = "stream_error") -> bytes:
+    def fail(self, message: str, error_type: str = "stream_error") -> list[bytes]:
         self.envelope.completed = True
-        self.reasoning.finalize(self.envelope)
-        self.message.finalize(self.envelope)
-        self.tools.finalize(self.envelope)
+        events: list[bytes] = []
+        events.extend(self.envelope.ensure_started())
+        events.extend(self.inline_think.flush_on_finalize(self))
+        events.extend(self.reasoning.finalize(self.envelope))
+        events.extend(self.message.finalize(self.envelope))
+        events.extend(self.tools.finalize(self.envelope))
         response = self.envelope.base_response("failed", self.envelope.completed_output_items())
         response["error"] = {"message": message, "type": error_type}
-        return sse_event("response.failed", {"type": "response.failed", "response": response})
+        events.append(sse_event("response.failed", {"type": "response.failed", "response": response}))
+        return events
 
     def build_assistant_message(self) -> ChatMessage | None:
         """Build an assistant ChatMessage for session persistence."""

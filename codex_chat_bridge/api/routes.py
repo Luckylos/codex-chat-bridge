@@ -8,7 +8,7 @@ from starlette.responses import Response as StarletteResponse
 
 from ..config import get_settings
 from ..errors import BridgeError, UpstreamError
-from ..metrics import concurrency_usage
+from ..metrics import concurrency_usage, upstream_errors_total
 from ..models import ResponsesRequest
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
@@ -38,10 +38,11 @@ async def list_models() -> JSONResponse:
         models = await UpstreamClient(get_settings()).list_models()
         return JSONResponse({"object": "list", "data": models})
     except httpx.HTTPStatusError as exc:
-        raise_upstream_status_error(exc, code="upstream_models_unavailable")
+        raise_upstream_status_error(exc, code="upstream_models_unavailable", model="models")
     except BridgeError:
         raise
     except Exception as exc:
+        upstream_errors_total.labels(model="models", status_code="502").inc()
         raise UpstreamError(str(exc), code="upstream_models_unavailable", status_code=502) from exc
 
 
@@ -57,9 +58,9 @@ async def create_response_compact(payload: ResponsesRequest):
 
 async def _create_response_impl(payload: ResponsesRequest):
     sem = _get_semaphore()
-    concurrency_usage.inc()
-    try:
-        async with sem:
+    async with sem:
+        concurrency_usage.inc()
+        try:
             return await create_response_core(payload)
-    finally:
-        concurrency_usage.dec()
+        finally:
+            concurrency_usage.dec()

@@ -35,6 +35,9 @@ def _int_env(key: str, default: int) -> int:
 
 _UNSET: Any = object()
 
+# TODO: Reintroduce a public bridge URL setting only when a runtime feature
+# actually consumes externally routable bridge URLs.
+
 # Canonical env var → field mapping.
 _ENV_MAP: dict[str, str] = {
     "BRIDGE_UPSTREAM_BASE_URL": "upstream_base_url",
@@ -44,7 +47,6 @@ _ENV_MAP: dict[str, str] = {
     "BRIDGE_UPSTREAM_MAX_RETRIES": "upstream_max_retries",
     "BRIDGE_MAX_CONCURRENT_REQUESTS": "max_concurrent_requests",
     "BRIDGE_UNSUPPORTED_TOOL_POLICY": "unsupported_tool_policy",
-    "BRIDGE_PUBLIC_BASE_URL": "public_base_url",
 }
 
 # Type-specific loaders keyed by field name.
@@ -56,7 +58,6 @@ _LOADERS: dict[str, type] = {
     "upstream_max_retries": int,
     "max_concurrent_requests": int,
     "unsupported_tool_policy": str,
-    "public_base_url": str,
 }
 
 
@@ -69,7 +70,6 @@ class Settings:
     upstream_max_retries: int = _UNSET  # type: ignore[assignment]
     max_concurrent_requests: int = _UNSET  # type: ignore[assignment]
     unsupported_tool_policy: str = _UNSET  # type: ignore[assignment]
-    public_base_url: str = _UNSET  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         for env_key, field in _ENV_MAP.items():
@@ -104,7 +104,6 @@ class Settings:
             "upstream_max_retries": 2,
             "max_concurrent_requests": 20,
             "unsupported_tool_policy": "ignore",
-            "public_base_url": "http://127.0.0.1:18090/v1",
         }
         return _DEFAULTS[field]
 

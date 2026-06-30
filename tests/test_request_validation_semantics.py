@@ -14,7 +14,6 @@ def _single_upstream_settings() -> Settings:
         upstream_base_url="https://newapi.example.com/v1",
         upstream_api_key="test-key",
         upstream_timeout_seconds=30,
-        public_base_url="http://127.0.0.1:18090/v1",
     )
 
 
@@ -182,7 +181,6 @@ class RequestValidationSemanticsTests(unittest.TestCase):
 
             # Second request — also uses chat format items
             resp_b = client.post("/v1/responses", json={
-                "model": "test-model",
                 "previous_response_id": rid,
                 "input": [{"role": "user", "content": "second"}, {"role": "user", "content": "third"}],
             })
@@ -405,7 +403,7 @@ class RequestValidationSemanticsTests(unittest.TestCase):
         self.assertEqual(response.json()["output_text"], "ok")
         self.assertEqual(
             captured_messages[0],
-            [{"role": "system", "content": "be helpful"}, {"role": "user", "content": ""}],
+            [{"role": "system", "content": "be helpful"}, {"role": "user", "content": "   \n  \t"}],
         )
 
 
@@ -458,7 +456,6 @@ class PreviousResponseIdIntegrationTests(unittest.TestCase):
 
             # Request B with previous_response_id
             resp_b = client.post("/v1/responses", json={
-                "model": "test-model",
                 "previous_response_id": rid,
                 "input": "Second message",
             })

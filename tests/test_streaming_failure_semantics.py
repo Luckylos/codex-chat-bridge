@@ -36,10 +36,12 @@ class StreamingFailureSemanticsTests(unittest.TestCase):
         compact = output.replace(" ", "")
         self.assertIn("event:response.failed", compact)
         self.assertNotIn("event:response.completed", compact)
+        self.assertIn("event:response.output_item.done", compact)
         self.assertIn('"type":"reasoning"', compact)
         self.assertIn('"text":"Needcontext."', compact)
         self.assertIn('"message":"badrequest"', compact)
         self.assertIn('"type":"invalid_request_error"', compact)
+        self.assertLess(compact.index("event:response.output_item.done"), compact.index("event:response.failed"))
 
 
 if __name__ == "__main__":

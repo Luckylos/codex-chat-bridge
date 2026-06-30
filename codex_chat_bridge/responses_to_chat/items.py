@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from ..protocol.types import ResponsesInputItem, ChatToolCallOutput
+from ..protocol.types import ChatToolCall, ResponsesInputItem
 
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments, canonical_json_string
 from ..models import ChatMessage, ResponsesRequest
@@ -56,7 +56,7 @@ def _should_skip(item: ResponsesInputItem, skip_ids: set[str]) -> bool:
 
 def flush_pending_tool_calls(
     messages: list[ChatMessage],
-    pending_tool_calls: list[ChatToolCallOutput],
+    pending_tool_calls: list[ChatToolCall],
     pending_reasoning: str | None,
 ) -> None:
     """Flush accumulated tool_calls into a single assistant message."""
@@ -73,12 +73,23 @@ def flush_pending_tool_calls(
     pending_tool_calls.clear()
 
 
+def _merge_reasoning_content(existing: str | None, value: object) -> str | None:
+    if not isinstance(value, str):
+        return existing
+    text = value.strip()
+    if not text:
+        return existing
+    if not existing:
+        return text
+    return existing + "\n\n" + text
+
+
 def append_input_items_as_chat_messages(
     payload: ResponsesRequest,
     messages: list[ChatMessage],
     tool_context: BridgeToolContext,
 ) -> None:
-    pending_tool_calls: list[ChatToolCallOutput] = []
+    pending_tool_calls: list[ChatToolCall] = []
     pending_reasoning: str | None = None
     skip_call_ids = _existing_call_ids(messages)
 
@@ -114,7 +125,7 @@ def append_input_items_as_chat_messages(
         if item_type in {"input_text", "output_text", "text", "latest_reminder"}:
             text = item.get("text", "") if isinstance(item.get("text"), str) else ""
             _flush()
-            messages.append(ChatMessage(role="user", content=text.strip()))
+            messages.append(ChatMessage(role="user", content=text))
             continue
 
         # ---- Image items → user message with image_url part ----
@@ -143,6 +154,9 @@ def append_input_items_as_chat_messages(
         if item_type == "function_call":
             if _should_skip(item, skip_call_ids):
                 continue
+            pending_reasoning = _merge_reasoning_content(
+                pending_reasoning, item.get("reasoning_content")
+            )
             pending_tool_calls.append({
                 "id": item.get("call_id") or item.get("id") or "call_0",
                 "type": "function",
@@ -159,6 +173,9 @@ def append_input_items_as_chat_messages(
         if item_type == "custom_tool_call":
             if _should_skip(item, skip_call_ids):
                 continue
+            pending_reasoning = _merge_reasoning_content(
+                pending_reasoning, item.get("reasoning_content")
+            )
             pending_tool_calls.append({
                 "id": item.get("call_id") or item.get("id") or "call_0",
                 "type": "function",
@@ -172,6 +189,9 @@ def append_input_items_as_chat_messages(
         if item_type == "tool_search_call":
             if _should_skip(item, skip_call_ids):
                 continue
+            pending_reasoning = _merge_reasoning_content(
+                pending_reasoning, item.get("reasoning_content")
+            )
             pending_tool_calls.append({
                 "id": item.get("call_id") or item.get("id") or "call_0",
                 "type": "function",

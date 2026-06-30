@@ -8,12 +8,12 @@ message with tool_calls.
 """
 from __future__ import annotations
 
-from ..protocol.types import ChatToolCallOutput
+from ..protocol.types import ChatToolCall
 
 from ..models import ChatMessage
 
 
-def has_matching_call(call_id: str, pending_tool_calls: list[ChatToolCallOutput], messages: list[ChatMessage]) -> bool:
+def has_matching_call(call_id: str, pending_tool_calls: list[ChatToolCall], messages: list[ChatMessage]) -> bool:
     """Check if a call_id has a matching tool call in pending buffer or flushed messages.
 
     Args:

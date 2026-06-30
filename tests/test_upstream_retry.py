@@ -251,3 +251,30 @@ class UpstreamCompatRetryTests(unittest.TestCase):
         self.assertNotIn("parallel_tool_calls", FakeAsyncClient.captured_requests[1])
         self.assertEqual(FakeAsyncClient.captured_requests[1]["reasoning_effort"], "high")
         self.assertNotIn("thinking", FakeAsyncClient.captured_requests[1])
+
+    def test_include_usage_retry_preserves_other_stream_options(self) -> None:
+        FakeAsyncClient.response_queue = [
+            FakeResponse(400, text="Unsupported parameter(s): include_usage"),
+            FakeResponse(200, chunks=[b"ok"]),
+        ]
+        payload = ChatCompletionsRequest.model_validate({
+            "model": "glm-5.2",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+            "stream_options": {"include_usage": True, "extra": "keep-me"},
+        })
+
+        async def collect() -> bytes:
+            parts: list[bytes] = []
+            async for chunk in self.client.stream_chat_completion(payload):
+                parts.append(chunk)
+            return b"".join(parts)
+
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", FakeAsyncClient):
+            body = asyncio.run(collect())
+
+        self.assertEqual(body, b"ok")
+        self.assertEqual(
+            FakeAsyncClient.captured_requests[1]["stream_options"],
+            {"include_usage": False, "extra": "keep-me"},
+        )
