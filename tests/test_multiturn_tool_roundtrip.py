@@ -39,7 +39,7 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
                             },
                         }
                     ],
-                    "reasoning_content": "tool call",
+                    "reasoning_content": "",
                 },
                 {
                     "role": "tool",
@@ -132,7 +132,7 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
 
         request = responses_to_chat_request(payload, "fallback-model")
         message = request.messages[0].model_dump(exclude_none=True)
-        self.assertEqual(message["reasoning_content"], "tool call")
+        self.assertEqual(message["reasoning_content"], "")
 
     def test_system_and_developer_messages_collapse_to_head_system_message(self) -> None:
         payload = ResponsesRequest.model_validate(
@@ -184,7 +184,7 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
             }
         )
         request = responses_to_chat_request(payload, "fallback-model")
-        self.assertEqual(request.messages[0].content, "Cannot comply.")
+        self.assertEqual(request.messages[0].content, "[refusal]: Cannot comply.")
 
     def test_o_series_uses_max_completion_tokens_instead_of_max_tokens(self) -> None:
         payload = ResponsesRequest.model_validate(
@@ -225,7 +225,7 @@ class MultiTurnToolRoundTripTests(unittest.TestCase):
 
         request = responses_to_chat_request(payload, "fallback-model")
         message = request.messages[0].model_dump(exclude_none=True)
-        self.assertEqual(message["reasoning_content"], "tool call\n\nNeed weather first.")
+        self.assertEqual(message["reasoning_content"], "Need weather first.")
 
     def test_typed_function_call_reasoning_content_is_preserved(self) -> None:
         payload = ResponsesRequest.model_validate(

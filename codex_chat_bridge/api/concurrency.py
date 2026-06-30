@@ -11,6 +11,9 @@ def _get_semaphore() -> asyncio.Semaphore:
     global _semaphore
     if _semaphore is None:
         count = get_settings().max_concurrent_requests
+        # NOTE: asyncio.Semaphore lazily binds the running loop on first use.
+        # Under uvicorn (single event loop) this is safe.  If ever migrated to
+        # multi-loop workers, create the semaphore inside bridge_lifespan instead.
         _semaphore = asyncio.Semaphore(count)
     return _semaphore
 

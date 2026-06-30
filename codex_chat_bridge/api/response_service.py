@@ -204,25 +204,29 @@ async def _stream_upstream_streaming(
 
     async def _yield_and_save() -> AsyncIterator[bytes]:
         saw_output = False
-        async for chunk in raw_stream:
-            saw_output = True
-            yield chunk
-        state = captured[0] if captured else None
-        assistant_message = state.build_assistant_message() if state is not None else None
-        should_save = (
-            saw_output
-            and state is not None
-            and state.envelope.completed
-            and state.envelope.status != "failed"
-        )
-        if should_save:
-            deps.save_session(
-                bridge_id,
-                chat_request.messages,
-                tool_context,
-                chat_request.model,
-                assistant_message=assistant_message,
+        try:
+            async for chunk in raw_stream:
+                saw_output = True
+                yield chunk
+        finally:
+            # Save session even if client disconnects mid-stream —
+            # otherwise subsequent previous_response_id requests lose context.
+            state = captured[0] if captured else None
+            assistant_message = state.build_assistant_message() if state is not None else None
+            should_save = (
+                saw_output
+                and state is not None
+                and state.envelope.completed
+                and state.envelope.status != "failed"
             )
+            if should_save:
+                deps.save_session(
+                    bridge_id,
+                    chat_request.messages,
+                    tool_context,
+                    chat_request.model,
+                    assistant_message=assistant_message,
+                )
 
     return StreamingResponse(_yield_and_save(), media_type="text/event-stream")
 
@@ -247,15 +251,18 @@ async def _stream_buffer_then_sse(
     assistant_message = _assistant_message_from_chat_body(chat_body)
 
     async def _yield_and_save() -> AsyncIterator[bytes]:
-        async for chunk in raw_stream:
-            yield chunk
-        if assistant_message is not None:
-            deps.save_session(
-                bridge_id,
-                chat_request.messages,
-                tool_context,
-                chat_request.model,
-                assistant_message=assistant_message,
-            )
+        try:
+            async for chunk in raw_stream:
+                yield chunk
+        finally:
+            # Save session even if client disconnects mid-stream.
+            if assistant_message is not None:
+                deps.save_session(
+                    bridge_id,
+                    chat_request.messages,
+                    tool_context,
+                    chat_request.model,
+                    assistant_message=assistant_message,
+                )
 
     return StreamingResponse(_yield_and_save(), media_type="text/event-stream")

@@ -33,7 +33,11 @@ def parse_sse_block(block: str) -> tuple[str | None, str | None]:
         if line.startswith("event:"):
             event_name = line.split(":", 1)[1].strip()
         elif line.startswith("data:"):
-            data_parts.append(line.split(":", 1)[1].lstrip())
+            # SSE spec: remove "data:" prefix and exactly one leading space
+            # (if present).  Do NOT strip all whitespace — intentional
+            # multi-space content must be preserved.
+            raw = line.split(":", 1)[1]
+            data_parts.append(raw[1:] if raw.startswith(" ") else raw)
     data = "\n".join(data_parts) if data_parts else None
     return event_name, data
 

@@ -59,7 +59,7 @@ def ensure_tool_call_reasoning_content(message: ChatMessage) -> None:
     """Backfill a placeholder reasoning_content if an assistant message has
     tool_calls but no reasoning — required by some upstream providers."""
     if message_has_tool_calls(message) and not (message.reasoning_content and message.reasoning_content.strip()):
-        message.reasoning_content = "tool call"
+        message.reasoning_content = ""
 
 
 def backfill_tool_call_reasoning_content(messages: list[ChatMessage]) -> None:

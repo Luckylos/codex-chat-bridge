@@ -32,7 +32,7 @@ def chat_message_content_from_response_content(content: Any) -> str | list[dict[
             continue
         if item_type == "refusal" and isinstance(item.get("refusal"), str):
             if item.get("refusal"):
-                parts.append({"type": "text", "text": item["refusal"]})
+                parts.append({"type": "text", "text": f"[refusal]: {item['refusal']}"})
             continue
         if item_type == "input_image":
             try:

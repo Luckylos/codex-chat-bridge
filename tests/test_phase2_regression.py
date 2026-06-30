@@ -300,9 +300,9 @@ def test_assistant_message_from_chat_body_preserves_refusal_only_turns() -> None
 
     assert message is not None
     assert message.role == "assistant"
-    # Refusal is intentionally NOT stored in content to avoid semantically
-    # conflating refusal with content — content is None when only refusal exists.
-    assert message.content is None
+    # Refusal is preserved with a typed prefix so it survives session replay
+    # without semantically conflating it with normal assistant content.
+    assert message.content == "[refusal]: No."
     assert message.reasoning_content is None
 
 

@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 
 from .config import Settings
+from .errors import UpstreamError
 from .reasoning_policy import ReasoningRequestState, build_initial_reasoning_state
 from .upstream_compat import UpstreamCompatPolicy
 from .upstream_transport import (
@@ -162,7 +163,10 @@ class UpstreamClient:
                     continue
                 raise
 
-        raise RuntimeError("retry loop exhausted unexpectedly")
+        # Unreachable if retry logic is correct: every branch either
+        # returns or raises.  Propagate as UpstreamError rather than
+        # a bare RuntimeError so callers get a meaningful error type.
+        raise UpstreamError("Retry loop exhausted without a conclusive result", code="retry_exhausted")
 
     async def create_chat_completion(self, payload: Any) -> dict[str, Any]:
         body = payload.model_dump(mode="json", exclude_none=True)

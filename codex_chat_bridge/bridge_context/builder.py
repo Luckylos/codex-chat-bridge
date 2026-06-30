@@ -13,7 +13,7 @@ def iter_request_input_items(payload: ResponsesRequest) -> list[Any]:
     if isinstance(payload.input, str):
         return [{"type": "input_text", "text": payload.input}]
     if isinstance(payload.input, list):
-        return payload.input
+        return list(payload.input)
     return [payload.input]
 
 

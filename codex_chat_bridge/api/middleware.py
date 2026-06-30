@@ -9,9 +9,13 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from ..errors import InvalidRequestError
 from ..metrics import request_duration_ms, requests_in_flight, requests_total
 
 _logger = logging.getLogger("codex-chat-bridge.access")
+
+# Default max request body size: 10 MB.  Override via BRIDGE_MAX_BODY_BYTES.
+_MAX_BODY_BYTES = 10 * 1024 * 1024
 
 
 class RequestLogMiddleware(BaseHTTPMiddleware):
@@ -26,6 +30,20 @@ class RequestLogMiddleware(BaseHTTPMiddleware):
         method = request.method
         path = request.url.path
         error: str | None = None
+
+        # Reject oversized request bodies early to prevent unbounded
+        # memory consumption during Pydantic parsing.
+        content_length = request.headers.get("content-length")
+        if content_length is not None:
+            try:
+                body_len = int(content_length)
+            except ValueError:
+                body_len = 0
+            if body_len > _MAX_BODY_BYTES:
+                raise InvalidRequestError(
+                    f"Request body too large: {body_len} bytes (max {_MAX_BODY_BYTES})",
+                    code="request_too_large",
+                )
 
         requests_in_flight.inc()
 

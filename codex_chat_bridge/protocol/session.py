@@ -128,6 +128,12 @@ def get_session_store() -> SessionStore:
     return _global_store
 
 
+def reset_session_store() -> None:
+    """Reset the global session store (for testing)."""
+    global _global_store
+    _global_store = None
+
+
 def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
     """从上游 Chat Completions 响应体中提取 assistant 消息，用于 session 持久化。"""
     choice = (chat_body.get("choices") or [{}])[0]
@@ -143,11 +149,13 @@ def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
         return None
     if not content:
         # Refusal text is semantically distinct from content, but ChatMessage
-        # has no refusal field.  Drop refusal from session replay rather than
-        # conflating it into the content field, and log for visibility.
+        # has no refusal field.  Preserve refusal as content with a typed
+        # prefix so it survives session replay without conflating it with
+        # normal assistant text.
         if refusal:
-            _logger.debug("Dropping refusal from session-persisted assistant message: %r", refusal[:200])
-        content = None
+            content = f"[refusal]: {refusal}"
+        else:
+            content = None
     return ChatMessage(
         role=role,  # type: ignore[arg-type]
         content=content,

@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import re
 from typing import Any, Literal
+
+_logger = logging.getLogger("codex-chat-bridge")
+
+_FLASHED_UNRECOGNIZED: set[str] = set()
 
 CanonicalReasoningEffort = Literal["unspecified", "none", "high", "xhigh"]
 ReasoningWireMode = Literal["provider_default", "effort_only"]
@@ -53,6 +58,15 @@ def normalize_canonical_reasoning_effort(value: Any) -> CanonicalReasoningEffort
         return "high"
     if normalized in {"xhigh", "max"}:
         return "xhigh"
+    # Unknown effort silently maps to \u0027high\u0027 — this is intentional
+    # but worth logging so operators catch typos (e.g. \u0027turbo\u0027 → high).
+    if normalized not in _FLASHED_UNRECOGNIZED:
+        _FLASHED_UNRECOGNIZED.add(normalized)
+        _logger.warning(
+            "Unrecognized reasoning effort %r mapped to \u0027high\u0027 — "
+            "check client SDK version or spelling",
+            value,
+        )
     return "high"
 
 
