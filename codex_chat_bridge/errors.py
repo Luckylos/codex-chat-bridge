@@ -123,3 +123,10 @@ class UnsupportedInputItemError(InvalidRequestError):
             detail=detail,
         )
         self.item_type = item_type
+
+    def to_error_body(self) -> dict[str, Any]:
+        """Override to include item_type in the error body."""
+        body = super().to_error_body()
+        if self.item_type is not None:
+            body["item_type"] = self.item_type
+        return body

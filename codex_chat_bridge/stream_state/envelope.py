@@ -3,16 +3,12 @@ from __future__ import annotations
 import time
 
 from ..protocol.sse import sse_event
-from ..response_semantics import map_chat_usage
+from ..response_semantics import map_chat_usage, REQUEST_ECHO_FIELDS
 
 
 class ResponseEnvelopeState:
     # Request-echo fields written into the final response per OpenAI spec
-    _REQUEST_ECHO_KEYS = (
-        "instructions", "max_output_tokens", "parallel_tool_calls",
-        "previous_response_id", "reasoning", "temperature",
-        "tool_choice", "tools", "top_p", "metadata",
-    )
+    # (imported from response_semantics to avoid duplication)
 
     def __init__(self, response_id: str | None = None) -> None:
         self.response_started = False
@@ -43,7 +39,7 @@ class ResponseEnvelopeState:
         """Write request-echo fields into the response dict."""
         if not self._request_echo:
             return
-        for key in self._REQUEST_ECHO_KEYS:
+        for key in REQUEST_ECHO_FIELDS:
             value = self._request_echo.get(key)
             if value is not None:
                 response[key] = value

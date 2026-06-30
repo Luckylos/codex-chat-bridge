@@ -29,8 +29,7 @@ def collect_tool_search_output_tools(value: Any, context: BridgeToolContext) -> 
         if isinstance(tools, list):
             for tool in tools:
                 context.add_response_tool(tool)
-    for nested in value.values():
-        collect_tool_search_output_tools(nested, context)
+        return  # Don't recurse into tool_search_output values
 
 
 def build_tool_context_from_request(payload: ResponsesRequest) -> BridgeToolContext:

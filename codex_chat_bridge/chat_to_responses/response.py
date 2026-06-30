@@ -9,32 +9,20 @@ from ..response_semantics import (
     incomplete_reason_from_finish_reason,
     map_chat_usage,
     response_status_from_finish_reason,
+    REQUEST_ECHO_FIELDS,
 )
 from .annotations import message_content_parts
 from .text import extract_reasoning_text, output_text_from_parts
 from .tools import chat_tool_calls_to_response_items
 
-# Fields echoed from the original Responses request into the response object
-# per the OpenAI Responses API specification.
-_REQUEST_ECHO_FIELDS = (
-    "instructions",
-    "max_output_tokens",
-    "parallel_tool_calls",
-    "previous_response_id",
-    "reasoning",
-    "temperature",
-    "tool_choice",
-    "tools",
-    "top_p",
-    "metadata",
-)
+# Request-echo fields imported from response_semantics (single source of truth)
 
 
 def _echo_request_fields(response: ResponsesResponse, original_request: dict | None) -> None:
     """Copy request-echo fields from the original request into the response."""
     if not original_request:
         return
-    for key in _REQUEST_ECHO_FIELDS:
+    for key in REQUEST_ECHO_FIELDS:
         value = original_request.get(key)
         if value is not None:
             setattr(response, key, value)

@@ -7,7 +7,7 @@ from ..protocol.types import ChatToolCall, ResponsesInputItem
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments, canonical_json_string
 from ..models import ChatMessage, ResponsesRequest
 from ..tool_arguments import canonicalize_tool_arguments
-from .content import reasoning_item_text, normalize_tool_output_content
+from .content import reasoning_item_text, normalize_tool_output_content, _join_reasoning
 from .content_mapping import (
     chat_message_content_from_response_content,
     iter_input_items,
@@ -76,12 +76,7 @@ def flush_pending_tool_calls(
 def _merge_reasoning_content(existing: str | None, value: object) -> str | None:
     if not isinstance(value, str):
         return existing
-    text = value.strip()
-    if not text:
-        return existing
-    if not existing:
-        return text
-    return existing + "\n\n" + text
+    return _join_reasoning(existing, value)
 
 
 def append_input_items_as_chat_messages(
@@ -192,6 +187,10 @@ def append_input_items_as_chat_messages(
             pending_reasoning = _merge_reasoning_content(
                 pending_reasoning, item.get("reasoning_content")
             )
+            # tool_search_call arguments is always a dict (e.g. {"query":...,"limit":5}),
+            # not a JSON string.  canonicalize_tool_arguments handles this correctly
+            # (dict reaches the json.dumps branch on line 30), but the naming is
+            # misleading — it was designed for function_call string arguments.
             pending_tool_calls.append({
                 "id": item.get("call_id") or item.get("id") or "call_0",
                 "type": "function",
@@ -246,7 +245,7 @@ def append_input_items_as_chat_messages(
             reasoning_content = item.get("reasoning_content") if isinstance(item.get("reasoning_content"), str) else None
             messages.append(
                 ChatMessage(
-                    role=chat_role,  # type: ignore[arg-type]
+                    role=chat_role,  # type: ignore[arg-type]  # validated to Literal set on line 241
                     content=chat_message_content_from_response_content(item.get("content")),
                     tool_calls=tool_calls,
                     tool_call_id=tool_call_id,

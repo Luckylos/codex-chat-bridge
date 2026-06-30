@@ -5,6 +5,18 @@ from typing import Any
 from ..protocol.types import ResponsesInputItem
 
 
+def _join_reasoning(*parts: str | None) -> str | None:
+    """Join non-empty reasoning parts with double-newline separators.
+
+    Shared by items.py and tools.py to avoid duplicating the
+    strip-filter-join logic.
+    """
+    stripped = [p.strip() for p in parts if isinstance(p, str) and p.strip()]
+    if not stripped:
+        return None
+    return "\n\n".join(stripped)
+
+
 def flatten_text_content(content: Any) -> str:
     """Flatten structured content to plain text."""
     if content is None:

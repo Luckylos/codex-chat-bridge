@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import copy
+import logging
 import time
 
 from ..bridge_context import BridgeToolContext, build_tool_context_from_request
 from ..models import ChatMessage, ResponsesRequest
+
+_logger = logging.getLogger("codex-chat-bridge")
 
 
 class SessionRecord:
@@ -20,7 +23,7 @@ class SessionRecord:
     请求对同一 response_id 的修改不会变异已持久化的历史。
     """
 
-    __slots__ = ("messages", "tool_context", "model", "created_at")
+    __slots__ = ("messages", "tool_context", "model", "created_at", "last_accessed_at")
 
     def __init__(
         self,
@@ -34,6 +37,7 @@ class SessionRecord:
         self.tool_context: BridgeToolContext = copy.deepcopy(tool_context)
         self.model = model
         self.created_at = created_at or time.time()
+        self.last_accessed_at = self.created_at
 
 
 _DEFAULT_TTL = 3600  # 1 hour
@@ -52,37 +56,55 @@ class SessionStore:
     # ------------------------------------------------------------------
 
     def get(self, response_id: str) -> SessionRecord | None:
-        """查询会话，过期条目视为不存在。"""
+        """查询会话，过期条目视为不存在。访问时自动续期 TTL。"""
         record = self._sessions.get(response_id)
         if record is None:
             return None
-        if time.time() - record.created_at > self._ttl:
+        # Use last_accessed_at so that frequent access keeps the session alive
+        if time.time() - record.last_accessed_at > self._ttl:
             del self._sessions[response_id]
             return None
-        return SessionRecord(record.messages, record.tool_context, record.model, created_at=record.created_at)
+        # Renew TTL: bump last_accessed_at so the session stays alive on access
+        record.last_accessed_at = time.time()
+        # SessionRecord.__init__ deep-copies to isolate from caller mutations.
+        # The stored record is already isolated (saved via copy), so constructing
+        # a new SessionRecord here provides a safe independent copy to the caller.
+        returned = SessionRecord(record.messages, record.tool_context, record.model, created_at=record.created_at)
+        returned.last_accessed_at = record.last_accessed_at
+        return returned
 
     def save(self, response_id: str, record: SessionRecord) -> None:
-        """保存会话状态，同时触发惰性清理。"""
-        self._sessions[response_id] = SessionRecord(
+        """保存会话状态，同时触发惰性清理。
+
+        Constructs a new SessionRecord (which deep-copies) so the stored
+        data is fully isolated from the caller's references.  This way
+        get() also returns a deep-copied SessionRecord, giving each
+        consumer its own isolated snapshot.
+        """
+        now = time.time()
+        # Deep-copy via SessionRecord constructor to isolate stored data
+        new_record = SessionRecord(
             record.messages,
             record.tool_context,
             record.model,
-            created_at=time.time(),
+            created_at=now,
         )
+        new_record.last_accessed_at = now
+        self._sessions[response_id] = new_record
         self._enforce_cap()
         self._cleanup()
 
     def _cleanup(self) -> None:
         """惰性清理过期条目（每次 get/save 触发）。"""
         now = time.time()
-        stale = [rid for rid, rec in self._sessions.items() if now - rec.created_at > self._ttl]
+        stale = [rid for rid, rec in self._sessions.items() if now - rec.last_accessed_at > self._ttl]
         for rid in stale:
             del self._sessions[rid]
 
     def _enforce_cap(self) -> None:
         """超出上限时淘汰最旧条目（非过期）。"""
         while len(self._sessions) > self._max_sessions:
-            oldest = min(self._sessions.items(), key=lambda kv: kv[1].created_at)[0]
+            oldest = min(self._sessions.items(), key=lambda kv: kv[1].last_accessed_at)[0]
             del self._sessions[oldest]
 
     @property
@@ -120,7 +142,12 @@ def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
     if not content and not tool_calls and not refusal and not reasoning_content:
         return None
     if not content:
-        content = refusal or ""
+        # Refusal text is semantically distinct from content, but ChatMessage
+        # has no refusal field.  Drop refusal from session replay rather than
+        # conflating it into the content field, and log for visibility.
+        if refusal:
+            _logger.debug("Dropping refusal from session-persisted assistant message: %r", refusal[:200])
+        content = None
     return ChatMessage(
         role=role,  # type: ignore[arg-type]
         content=content,

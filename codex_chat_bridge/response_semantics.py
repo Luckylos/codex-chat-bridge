@@ -1,8 +1,25 @@
 """Shared response semantics: status mapping, usage mapping, and incomplete details."""
 from __future__ import annotations
 
+# Request-echo fields: fields from the original Responses request that are
+# echoed back in the response object per the OpenAI Responses API specification.
+REQUEST_ECHO_FIELDS = (
+    "instructions",
+    "max_output_tokens",
+    "parallel_tool_calls",
+    "previous_response_id",
+    "reasoning",
+    "temperature",
+    "tool_choice",
+    "tools",
+    "top_p",
+    "metadata",
+)
+
 
 def map_chat_usage(usage: dict | None) -> dict:
+    # `or 0` handles None (field absent) and explicit 0 (some gateways
+    # return None for token counts they don't track) uniformly.
     if not usage:
         return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
     # Some gateways (NewAPI) return both old (prompt_tokens) and new

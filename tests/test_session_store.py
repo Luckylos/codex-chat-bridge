@@ -65,9 +65,10 @@ class SessionStoreTests(unittest.TestCase):
         )
         # 先 save（此时 created_at = time.time()）
         self.store.save("resp_expired", record)
-        # 直接修改内部记录的 created_at（越过 save 的时间覆盖）
+        # 直接修改内部记录的 created_at 和 last_accessed_at（越过 save 的时间覆盖）
         stored = self.store._sessions["resp_expired"]
         stored.created_at = time.time() - 7200
+        stored.last_accessed_at = time.time() - 7200
         self.assertIsNone(self.store.get("resp_expired"))
 
     def test_lazy_cleanup_only_expired(self) -> None:
@@ -85,6 +86,7 @@ class SessionStoreTests(unittest.TestCase):
         self.store.save("resp_stale", stale_record)
         # 手动过期 stale，fresh 保持正常
         self.store._sessions["resp_stale"].created_at = time.time() - 7200
+        self.store._sessions["resp_stale"].last_accessed_at = time.time() - 7200
         # get fresh 触发 cleanup
         self.assertIsNotNone(self.store.get("resp_fresh"))
         self.assertIsNone(self.store.get("resp_stale"))

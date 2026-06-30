@@ -34,7 +34,6 @@ def _is_safe_media_url(url: str | None, *, allowed_data_prefix: str | None = Non
 
 
 # Backward-compatible aliases
-_ALLOWED_IMAGE_SCHEMES = ("https://", "data:image/")
 
 
 def is_safe_image_url(url: str | None) -> bool:

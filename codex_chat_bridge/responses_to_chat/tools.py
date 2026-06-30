@@ -6,6 +6,9 @@ from ..protocol.types import ChatToolCall
 
 from ..bridge_context import BridgeToolContext
 from ..models import ChatMessage
+
+from .content import _join_reasoning
+
 from ..tool_arguments import canonicalize_tool_arguments
 
 
@@ -47,10 +50,7 @@ def append_reasoning_to_last_assistant(messages: list[ChatMessage], reasoning: s
     for message in reversed(messages):
         if message.role != "assistant":
             continue
-        if message.reasoning_content and message.reasoning_content.strip():
-            message.reasoning_content = message.reasoning_content.strip() + "\n\n" + reasoning
-            return True
-        message.reasoning_content = reasoning
+        message.reasoning_content = _join_reasoning(message.reasoning_content, reasoning)
         return True
     return False
 

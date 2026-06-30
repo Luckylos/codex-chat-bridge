@@ -87,7 +87,7 @@ class ResponsesResponse(BaseModel):
     status: str = "completed"
     model: str
     output: list[dict[str, Any]]
-    output_text: str
+    output_text: str | None = None
     created_at: int | None = None
     usage: dict[str, Any] | None = None
     incomplete_details: dict[str, Any] | None = None

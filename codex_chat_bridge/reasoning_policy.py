@@ -122,19 +122,16 @@ def select_reasoning_provider_bucket(model: str | None) -> str:
     everything else → "openai_like".
     """
     normalized_model = (model or "").strip()
-    # First check passthrough (kimi)
     for pattern, _ in _BUCKET_RULES:
-        if pattern.search(normalized_model):
-            # Find the matching pattern group to determine legacy name
-            m = pattern.search(normalized_model)
-            if m:
-                matched = m.group(1).lower()
-                if matched in {"kimi", "moonshot"}:
-                    return "kimi"
-                if matched in {"deepseek"}:
-                    return "deepseek"
-                if matched in {"glm", "zhipu", "bigmodel"}:
-                    return "glm"
+        m = pattern.search(normalized_model)
+        if m:
+            matched = m.group(1).lower()
+            if matched in {"kimi", "moonshot"}:
+                return "kimi"
+            if matched in {"deepseek"}:
+                return "deepseek"
+            if matched in {"glm", "zhipu", "bigmodel"}:
+                return "glm"
     return "openai_like"
 
 
@@ -163,22 +160,17 @@ def build_reasoning_fallback_step(
     state: ReasoningRequestState,
     error_text: str,
 ) -> ReasoningFallbackStep | None:
-    effort_rejected = _error_mentions(error_text, "reasoning_effort")
-
-    if not effort_rejected:
+    if not _error_mentions(error_text, "reasoning_effort"):
         return None
 
     if state.wire_mode == "provider_default":
         return None
 
-    if state.wire_mode == "effort_only":
-        if effort_rejected:
-            return ReasoningFallbackStep(
-                label="unsupported_reasoning_effort_to_provider_default",
-                wire_mode="provider_default",
-            )
-
-    return None
+    # effort_rejected is guaranteed True here (checked above)
+    return ReasoningFallbackStep(
+        label="unsupported_reasoning_effort_to_provider_default",
+        wire_mode="provider_default",
+    )
 
 
 def build_reasoning_fallback_state(

@@ -300,7 +300,9 @@ def test_assistant_message_from_chat_body_preserves_refusal_only_turns() -> None
 
     assert message is not None
     assert message.role == "assistant"
-    assert message.content == "No."
+    # Refusal is intentionally NOT stored in content to avoid semantically
+    # conflating refusal with content — content is None when only refusal exists.
+    assert message.content is None
     assert message.reasoning_content is None
 
 
@@ -311,7 +313,9 @@ def test_assistant_message_from_chat_body_preserves_reasoning_only_turns() -> No
 
     assert message is not None
     assert message.role == "assistant"
-    assert message.content == ""
+    # When only reasoning_content exists (no content, refusal, or tool_calls),
+    # content is None rather than empty string.
+    assert message.content is None
     assert message.reasoning_content == "thinking"
 
 

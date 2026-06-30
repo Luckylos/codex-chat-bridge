@@ -122,7 +122,8 @@ async def create_response_core(
                 code="missing_model",
             )
         tool_context = session_context if existing_messages is not None else build_tool_context_from_request(payload)
-        assert tool_context is not None
+        if tool_context is None:
+            raise InvalidRequestError("No tool context could be resolved for the request.", code="no_tool_context")
 
         chat_request = responses_to_chat_request(
             payload,
@@ -248,12 +249,13 @@ async def _stream_buffer_then_sse(
     async def _yield_and_save() -> AsyncIterator[bytes]:
         async for chunk in raw_stream:
             yield chunk
-        deps.save_session(
-            bridge_id,
-            chat_request.messages,
-            tool_context,
-            chat_request.model,
-            assistant_message=assistant_message,
-        )
+        if assistant_message is not None:
+            deps.save_session(
+                bridge_id,
+                chat_request.messages,
+                tool_context,
+                chat_request.model,
+                assistant_message=assistant_message,
+            )
 
     return StreamingResponse(_yield_and_save(), media_type="text/event-stream")

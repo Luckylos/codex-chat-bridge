@@ -12,6 +12,4 @@ class UnsupportedResponsesInputItemError(UnsupportedInputItemError):
         if detail:
             msg = f"{msg}: {detail}"
         super().__init__(msg, item_type=item_type, detail=detail)
-        self.item_type = item_type
         self.item = item
-        self.detail = detail

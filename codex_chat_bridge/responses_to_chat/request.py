@@ -84,8 +84,6 @@ def responses_to_chat_request(
     if is_openai_o_series(model_name) and payload.max_output_tokens is not None:
         request.max_completion_tokens = payload.max_output_tokens
     for field in EXTRA_CHAT_PASSTHROUGH_FIELDS:
-        if field == "response_format":
-            continue
         value = getattr(payload, field, None)
         if value is not None:
             setattr(request, field, value)

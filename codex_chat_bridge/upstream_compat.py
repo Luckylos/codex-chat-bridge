@@ -2,11 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .reasoning_policy import ReasoningRequestState, build_reasoning_fallback_state
-
-
-def _error_mentions(error_body: str, needle: str) -> bool:
-    return needle in error_body.lower()
+from .reasoning_policy import ReasoningRequestState, build_reasoning_fallback_state, _error_mentions
 
 
 def _rewrite_fields(body: dict[str, Any], **updates: Any) -> dict[str, Any]:

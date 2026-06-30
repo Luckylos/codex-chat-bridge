@@ -62,12 +62,12 @@ class InlineThinkStateMachine:
             return state.push_text_delta(delta)
 
         if self._phase == self.PHASE_REASONING:
-            # Inside a  think block — look for closing tag
+            # Inside a <think> block — look for closing tag
+            events: list[bytes] = []
             close_re = re.compile(r"</(?:think|thinking)\s*>", re.IGNORECASE)
             m = close_re.search(delta)
             if m:
                 # Close tag found: emit pre-close as reasoning, switch to text
-                events: list[bytes] = []
                 pre = delta[:m.start()]
                 if pre:
                     events.extend(state.push_reasoning_delta(pre))
@@ -80,14 +80,14 @@ class InlineThinkStateMachine:
             # No close tag yet — entire delta is reasoning
             return state.push_reasoning_delta(delta)
 
-        # Phase: DETECTING — accumulate to check for  prefix
+        # Phase: DETECTING — accumulate to check for <think> prefix
         self._buffer += delta
         buf = self._buffer.lstrip()
 
         think_open_re = re.compile(r"<(?:think|thinking)\s*>", re.IGNORECASE)
         m = think_open_re.match(buf)
         if m:
-            # Detected  open tag — switch to reasoning phase
+            # Detected <think> open tag — switch to reasoning phase
             self._phase = self.PHASE_REASONING
             events: list[bytes] = []
             # Anything after the open tag is reasoning content

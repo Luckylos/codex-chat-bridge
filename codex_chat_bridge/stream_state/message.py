@@ -45,7 +45,7 @@ class MessageState:
         last_segment = self.segments[-1]
         if last_segment.get("type") != "output_text":
             return None
-        if last_segment["content_index"] in self.text_part_done:
+        if last_segment.get("content_index", -1) in self.text_part_done:
             return None
         return last_segment
 

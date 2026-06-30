@@ -33,7 +33,7 @@ def _int_env(key: str, default: int) -> int:
     return int(raw)
 
 
-_UNSET: Any = object()
+_UNSET: object = object()
 
 # TODO: Reintroduce a public bridge URL setting only when a runtime feature
 # actually consumes externally routable bridge URLs.
@@ -151,7 +151,7 @@ def validate_config() -> None:
     if settings.max_concurrent_requests < 1:
         raise RuntimeError(f"BRIDGE_MAX_CONCURRENT_REQUESTS must be >= 1, got {settings.max_concurrent_requests}")
 
-    upstream_url = settings.upstream_base_url.rstrip("/")
+    upstream_url = settings.upstream_base_url
     _logger.info(
         "Config valid: upstream=%s timeout=%.0fs max_retries=%d concurrency=%d",
         upstream_url,

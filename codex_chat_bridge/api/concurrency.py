@@ -18,4 +18,4 @@ def _get_semaphore() -> asyncio.Semaphore:
 def reset_semaphore(count: int | None = None) -> None:
     """Reset semaphore (for testing)."""
     global _semaphore
-    _semaphore = asyncio.Semaphore(count) if count else None
+    _semaphore = asyncio.Semaphore(count) if count is not None else None

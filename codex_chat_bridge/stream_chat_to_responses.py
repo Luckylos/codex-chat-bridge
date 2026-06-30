@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 import json
 
@@ -121,6 +122,10 @@ def _process_chat_chunk(
                 events.extend(state.push_text_delta(part["text"]))
             elif part_type == "refusal" and isinstance(part.get("refusal"), str) and part.get("refusal"):
                 events.extend(state.push_refusal_part(part["refusal"]))
+            else:
+                logging.getLogger("codex-chat-bridge").debug(
+                    "Skipping unhandled structured content part type: %s", part_type
+                )
 
     refusal = delta.get("refusal")
     if isinstance(refusal, str) and refusal:
@@ -144,7 +149,7 @@ def _chat_message_to_fake_delta(chat_choice: dict) -> dict:
     """
     message = chat_choice.get("message") or {}
     delta: dict = {
-        "content": message.get("content") or "",
+        "content": message.get("content"),
         "role": "assistant",
         "refusal": message.get("refusal"),
         "annotations": message.get("annotations"),

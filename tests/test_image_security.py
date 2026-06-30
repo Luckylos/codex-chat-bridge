@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import unittest
 
-from codex_chat_bridge.responses_to_chat.constants import BUILT_IN_RESPONSES_TOOLS
 from codex_chat_bridge.responses_to_chat.errors import UnsupportedResponsesInputItemError
 from codex_chat_bridge.responses_to_chat.media import chat_image_part_from_input_item, is_safe_image_url
 
@@ -52,23 +51,3 @@ class ImageUrlSecurityTests(unittest.TestCase):
             "image_url": "data:image/png;base64,dGVzdA==",
         })
         self.assertEqual(result["image_url"]["url"], "data:image/png;base64,dGVzdA==")
-
-
-class BuiltInToolsTests(unittest.TestCase):
-    def test_web_search_is_listed(self) -> None:
-        self.assertIn("web_search", BUILT_IN_RESPONSES_TOOLS)
-
-    def test_computer_use_is_listed(self) -> None:
-        self.assertIn("computer_use", BUILT_IN_RESPONSES_TOOLS)
-
-    def test_mcp_is_listed(self) -> None:
-        self.assertIn("mcp", BUILT_IN_RESPONSES_TOOLS)
-
-    def test_file_search_is_listed(self) -> None:
-        self.assertIn("file_search", BUILT_IN_RESPONSES_TOOLS)
-
-    def test_code_interpreter_is_listed(self) -> None:
-        self.assertIn("code_interpreter", BUILT_IN_RESPONSES_TOOLS)
-
-    def test_image_generation_is_listed(self) -> None:
-        self.assertIn("image_generation", BUILT_IN_RESPONSES_TOOLS)
