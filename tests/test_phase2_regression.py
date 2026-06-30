@@ -134,7 +134,7 @@ def test_create_response_core_rejects_n_greater_than_one_before_upstream() -> No
 
     with patch("codex_chat_bridge.api.response_service.UpstreamClient", side_effect=AssertionError("UpstreamClient should not be created")):
         try:
-            asyncio.run(routes._create_response_core(payload))
+            asyncio.run(response_service.create_response_core(payload))
         except InvalidRequestError as exc:
             assert exc.code == "unsupported_n"
             assert exc.status_code == 400
@@ -164,7 +164,7 @@ def test_create_response_core_accepts_n_one_and_none() -> None:
     ):
         for n in (1, None):
             payload = ResponsesRequest(model="test-model", input="hello", n=n)
-            response = asyncio.run(routes._create_response_core(payload))
+            response = asyncio.run(response_service.create_response_core(payload))
             assert response.status_code == 200
 
 
@@ -228,14 +228,18 @@ def test_stream_upstream_streaming_does_not_persist_failed_streams() -> None:
     saves: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     chat_request = SimpleNamespace(messages=[], model="test-model")
 
+    deps = response_service.ServiceDependencies(
+        save_session=lambda *args, **kwargs: saves.append((args, kwargs)),
+    )
+
     with patch("codex_chat_bridge.api.response_service.create_responses_sse_stream_from_chat_stream", fake_stream):
         response = asyncio.run(
-            response_service.stream_upstream_streaming(
+            response_service._stream_upstream_streaming(
                 DummyClient(),
                 chat_request,
                 BridgeToolContext(),
                 "resp_bridge_failed",
-                save_session_fn=lambda *args, **kwargs: saves.append((args, kwargs)),
+                deps=deps,
             )
         )
         asyncio.run(_collect_stream_chunks(response))
@@ -269,14 +273,18 @@ def test_stream_upstream_streaming_persists_successful_streams() -> None:
     saves: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
     chat_request = SimpleNamespace(messages=[], model="test-model")
 
+    deps = response_service.ServiceDependencies(
+        save_session=lambda *args, **kwargs: saves.append((args, kwargs)),
+    )
+
     with patch("codex_chat_bridge.api.response_service.create_responses_sse_stream_from_chat_stream", fake_stream):
         response = asyncio.run(
-            response_service.stream_upstream_streaming(
+            response_service._stream_upstream_streaming(
                 DummyClient(),
                 chat_request,
                 BridgeToolContext(),
                 "resp_bridge_completed",
-                save_session_fn=lambda *args, **kwargs: saves.append((args, kwargs)),
+                deps=deps,
             )
         )
         asyncio.run(_collect_stream_chunks(response))

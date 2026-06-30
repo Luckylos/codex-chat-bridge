@@ -65,13 +65,17 @@ def raise_upstream_status_error(exc: httpx.HTTPStatusError, *, code: str) -> Non
 
 @dataclass(slots=True)
 class ServiceDependencies:
+    """Typed dependency bundle for the response service layer.
+
+    All fields default to the production implementations; tests can
+    override individual fields without patching module globals.
+    """
+
     get_settings: Callable[[], Any] = field(default_factory=lambda: get_settings)
     upstream_client_cls: type[Any] = field(default_factory=lambda: UpstreamClient)
     resolve_session: Callable[..., Any] = field(default_factory=lambda: resolve_session)
     save_session: Callable[..., Any] = field(default_factory=lambda: save_session)
     raise_upstream_status_error: Callable[..., Any] = field(default_factory=lambda: raise_upstream_status_error)
-    stream_upstream_streaming: Callable[..., Any] = field(default_factory=lambda: stream_upstream_streaming)
-    stream_buffer_then_sse: Callable[..., Any] = field(default_factory=lambda: stream_buffer_then_sse)
 
 
 async def create_response_core(
@@ -115,21 +119,21 @@ async def create_response_core(
 
         if payload.stream:
             if settings.upstream_streaming:
-                return await deps.stream_upstream_streaming(
+                return await _stream_upstream_streaming(
                     client,
                     chat_request,
                     tool_context,
                     bridge_id,
+                    deps=deps,
                     original_request=original_request,
-                    save_session_fn=deps.save_session,
                 )
-            return await deps.stream_buffer_then_sse(
+            return await _stream_buffer_then_sse(
                 client,
                 chat_request,
                 tool_context,
                 bridge_id,
+                deps=deps,
                 original_request=original_request,
-                save_session_fn=deps.save_session,
             )
 
         chat_body = await client.create_chat_completion(chat_request)
@@ -159,14 +163,14 @@ async def create_response_core(
         raise BridgeError(str(exc), code="bridge_runtime_error", status_code=500) from exc
 
 
-async def stream_upstream_streaming(
+async def _stream_upstream_streaming(
     client: UpstreamClient,
     chat_request,
     tool_context: BridgeToolContext,
     bridge_id: str,
-    original_request: dict | None = None,
     *,
-    save_session_fn: Callable = save_session,
+    deps: ServiceDependencies,
+    original_request: dict | None = None,
 ) -> StreamingResponse:
     """Stream: upstream supports streaming → passthrough SSE with session save."""
     captured: list = []
@@ -192,7 +196,7 @@ async def stream_upstream_streaming(
             and state.envelope.status != "failed"
         )
         if should_save:
-            save_session_fn(
+            deps.save_session(
                 bridge_id,
                 chat_request.messages,
                 tool_context,
@@ -203,14 +207,14 @@ async def stream_upstream_streaming(
     return StreamingResponse(_yield_and_save(), media_type="text/event-stream")
 
 
-async def stream_buffer_then_sse(
+async def _stream_buffer_then_sse(
     client: UpstreamClient,
     chat_request,
     tool_context: BridgeToolContext,
     bridge_id: str,
-    original_request: dict | None = None,
     *,
-    save_session_fn: Callable = save_session,
+    deps: ServiceDependencies,
+    original_request: dict | None = None,
 ) -> StreamingResponse:
     """Stream: upstream doesn't stream → buffer chat_body, wrap as SSE, save session."""
     chat_body = await client.create_chat_completion(chat_request)
@@ -225,7 +229,7 @@ async def stream_buffer_then_sse(
     async def _yield_and_save() -> AsyncIterator[bytes]:
         async for chunk in raw_stream:
             yield chunk
-        save_session_fn(
+        deps.save_session(
             bridge_id,
             chat_request.messages,
             tool_context,

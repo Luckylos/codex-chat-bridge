@@ -10,7 +10,6 @@ from ..config import get_settings
 from ..errors import BridgeError, UpstreamError
 from ..metrics import concurrency_usage
 from ..models import ResponsesRequest
-from ..protocol.session import resolve_session
 from ..upstream import UpstreamClient
 from .concurrency import _get_semaphore
 from .lifespan import create_app
@@ -61,10 +60,6 @@ async def _create_response_impl(payload: ResponsesRequest):
     concurrency_usage.inc()
     try:
         async with sem:
-            return await _create_response_core(payload)
+            return await create_response_core(payload)
     finally:
         concurrency_usage.dec()
-
-
-async def _create_response_core(payload: ResponsesRequest):
-    return await create_response_core(payload)
