@@ -162,9 +162,106 @@ class BridgeToolContext:
         children = namespace_tool.get("tools") or namespace_tool.get("children")
         if not isinstance(namespace, str) or not namespace.strip() or not isinstance(children, list):
             return
+
+        strategy = (namespace_tool.get("strategy") or "flat").lower()
+        if strategy in ("nested_oneof", "nested_anyof"):
+            self._add_nested_namespace_tool(namespace, children, strategy)
+        else:
+            for child in children:
+                if isinstance(child, dict) and child.get("type") == "function":
+                    self.add_function_tool(child, namespace=namespace)
+
+    def _add_nested_namespace_tool(
+        self,
+        namespace: str,
+        children: list[Any],
+        strategy: str,
+    ) -> None:
+        """Register a namespace tool with NestedOneOf or NestedAnyOf schema merging.
+
+        Instead of flattening each child into a separate Chat tool, we
+        produce a single Chat tool whose parameters schema describes the
+        action selector so the upstream model picks a concrete action by
+        name at generation time.
+
+        NestedOneOf → oneOf variant schemas, one per action.
+        NestedAnyOf → action enum + params.anyOf variant schemas.
+        """
+        sub_tools: list[dict[str, Any]] = []
+        action_names: list[str] = []
         for child in children:
-            if isinstance(child, dict) and child.get("type") == "function":
-                self.add_function_tool(child, namespace=namespace)
+            if not isinstance(child, dict) or child.get("type") != "function":
+                continue
+            func = child.get("function") if isinstance(child.get("function"), dict) else child
+            name = tool_name_from_value(func)
+            if not name:
+                continue
+            sub_tools.append(func)
+            action_names.append(name)
+
+        if not sub_tools:
+            return
+
+        chat_name = flatten_namespace_tool_name(namespace, namespace)
+
+        if strategy == "nested_oneof":
+            variants: list[dict[str, Any]] = []
+            for func in sub_tools:
+                action_name = tool_name_from_value(func) or "unknown"
+                params = func.get("parameters") or {}
+                if not isinstance(params, dict):
+                    params = {}
+                props = dict(params.get("properties") or {})
+                props["action"] = {"type": "string", "enum": [action_name]}
+                required = list(params.get("required") or [])
+                if "action" not in required:
+                    required.insert(0, "action")
+                variant = {
+                    "type": "object",
+                    "properties": props,
+                    "required": required,
+                }
+                if params.get("additionalProperties") is not None:
+                    variant["additionalProperties"] = params["additionalProperties"]
+                variants.append(variant)
+            schema: dict[str, Any] = {"type": "object", "oneOf": variants}
+        else:  # nested_anyof
+            action_enum = {"type": "string", "enum": action_names}
+            param_variants: list[dict[str, Any]] = []
+            for func in sub_tools:
+                params = func.get("parameters") or {}
+                if isinstance(params, dict):
+                    param_variants.append(params)
+                else:
+                    param_variants.append({})
+            schema = {
+                "type": "object",
+                "properties": {
+                    "action": action_enum,
+                    "params": {"anyOf": param_variants} if len(param_variants) > 1 else param_variants[0] if param_variants else {},
+                },
+                "required": ["action"],
+            }
+
+        chat_tool = {
+            "type": "function",
+            "function": {
+                "name": chat_name,
+                "description": f"Namespace tool: {namespace} (strategy: {strategy})",
+                "parameters": schema,
+            },
+        }
+        self.add_chat_tool(
+            chat_name,
+            ToolSpec(
+                kind="namespace",
+                name=namespace,
+                namespace=namespace,
+                namespace_strategy=strategy,
+                actions=action_names,
+            ),
+            chat_tool,
+        )
 
     def add_response_tool(self, tool: Any) -> None:
         if isinstance(tool, str):

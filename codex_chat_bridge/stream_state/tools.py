@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from ..bridge_context import BridgeToolContext
 from .envelope import ResponseEnvelopeState
 from .tool_events import (
@@ -17,6 +19,8 @@ from .tool_items import (
     ensure_tool_identity,
     resolve_tool_kind,
 )
+
+_logger = logging.getLogger("codex-chat-bridge")
 
 
 class ToolStateStore:
@@ -57,6 +61,20 @@ class ToolStateStore:
             state.reasoning_content = reasoning
 
         added_now = not state.added and (state.call_id or state.name)
+
+        # Detect namespace-level tool call where a concrete action was expected.
+        # This happens when the upstream model returns the namespace name instead
+        # of picking a specific action from the merged schema.  We emit a warning
+        # but continue — the namespace-name function_call is sent as-is.
+        if added_now and state.name:
+            spec = self.tool_context.lookup_chat_name(state.name)
+            if spec and spec.kind == "namespace" and spec.namespace_strategy in ("nested_oneof", "nested_anyof"):
+                _logger.warning(
+                    "Nested namespace tool call from upstream: name=%s, expected one of: %s",
+                    state.name,
+                    spec.actions,
+                )
+
         events, kind = self._ensure_added(envelope, state, index)
         if added_now and state.arguments and not kind.is_custom:
             events.append(function_arguments_delta(state.item_id, state.output_index, state.arguments))

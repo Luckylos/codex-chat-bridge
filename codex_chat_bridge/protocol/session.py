@@ -4,6 +4,19 @@ Persists messages + tool_context for later request recovery, enabling
 Responses API session continuity.  Currently a single-process in-memory
 store with lazy TTL cleanup.  For multi-process/persistent backends,
 replace the _sessions backend.
+
+Reasoning cache
+~~~~~~~~~~~~~~~
+When a reasoning model (DeepSeek-R1, etc.) produces thinking followed by
+a tool call, the reasoning_content is saved in ``SessionRecord.reasoning_cache``
+keyed by ``tool_call_id``.  On the next turn, ``resolve_session`` calls
+``apply_reasoning_cache`` which restores the cached reasoning into assistant
+messages that have tool_calls but are missing their reasoning_content.  This
+prevents the model from "forgetting" its prior thinking across tool-call turns.
+
+Without the cache, ``ensure_tool_call_reasoning_content`` backfills an empty
+string, which avoids upstream 400 errors but causes model quality degradation
+because the model cannot reference its own prior reasoning.
 """
 
 from __future__ import annotations
@@ -25,9 +38,20 @@ class SessionRecord:
     messages and tool_context are deep-copied on construction, ensuring
     that subsequent requests for the same response_id cannot mutate
     the persisted history.
+
+    reasoning_cache maps tool_call_id → reasoning text so that the next
+    request in the same session can restore prior thinking for reasoning
+    models that lose context across tool-call turns.
     """
 
-    __slots__ = ("messages", "tool_context", "model", "created_at", "last_accessed_at")
+    __slots__ = (
+        "messages",
+        "tool_context",
+        "model",
+        "created_at",
+        "last_accessed_at",
+        "reasoning_cache",
+    )
 
     def __init__(
         self,
@@ -35,14 +59,72 @@ class SessionRecord:
         tool_context: BridgeToolContext,
         model: str,
         created_at: float | None = None,
+        reasoning_cache: dict[str, str] | None = None,
     ) -> None:
-        # Deep-copy to isolate from caller mutations
         self.messages: list[ChatMessage] = copy.deepcopy(messages)
         self.tool_context: BridgeToolContext = copy.deepcopy(tool_context)
         self.model = model
         self.created_at = created_at or time.time()
         self.last_accessed_at = self.created_at
+        self.reasoning_cache: dict[str, str] = dict(reasoning_cache) if reasoning_cache else {}
 
+
+# ---------------------------------------------------------------------------
+# Reasoning cache helpers
+# ---------------------------------------------------------------------------
+
+
+def extract_reasoning_cache(messages: list[ChatMessage]) -> dict[str, str]:
+    """Extract tool_call_id → reasoning_content mappings from assistant messages.
+
+    Only entries where the assistant message has *both* tool_calls and
+    non-empty reasoning_content are cached.  This preserves the model's
+    thinking so it can be replayed on subsequent turns.
+    """
+    cache: dict[str, str] = {}
+    for msg in messages:
+        if msg.role != "assistant" or not msg.tool_calls:
+            continue
+        reasoning = msg.reasoning_content
+        if not reasoning or not reasoning.strip():
+            continue
+        for tc in msg.tool_calls:
+            tc_id = tc.get("id") or tc.get("call_id") or ""
+            if isinstance(tc_id, str) and tc_id:
+                cache[tc_id] = reasoning
+    return cache
+
+
+def apply_reasoning_cache(messages: list[ChatMessage], cache: dict[str, str]) -> None:
+    """Restore cached reasoning into assistant messages missing reasoning_content.
+
+    For each assistant message that has tool_calls but empty/missing
+    reasoning_content, look up each of its tool_call IDs in *cache*.
+    If a match is found, restore the cached reasoning text.
+
+    This is called by ``resolve_session`` before returning messages so
+    that downstream conversion (``ensure_tool_call_reasoning_content``)
+    finds real reasoning instead of having to backfill empty strings.
+    """
+    if not cache:
+        return
+    for msg in messages:
+        if msg.role != "assistant" or not msg.tool_calls:
+            continue
+        if msg.reasoning_content and msg.reasoning_content.strip():
+            continue
+        for tc in msg.tool_calls:
+            tc_id = tc.get("id") or tc.get("call_id") or ""
+            if isinstance(tc_id, str) and tc_id:
+                cached = cache.get(tc_id)
+                if cached:
+                    msg.reasoning_content = cached
+                    break
+
+
+# ---------------------------------------------------------------------------
+# Session store
+# ---------------------------------------------------------------------------
 
 _DEFAULT_TTL = 3600  # 1 hour
 
@@ -55,25 +137,22 @@ class SessionStore:
         self._max_sessions = max_sessions
         self._sessions: dict[str, SessionRecord] = {}
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def get(self, response_id: str) -> SessionRecord | None:
         """Look up a session; expired entries are treated as missing. Access renews the TTL."""
         record = self._sessions.get(response_id)
         if record is None:
             return None
-        # Use last_accessed_at so that frequent access keeps the session alive
         if time.time() - record.last_accessed_at > self._ttl:
             del self._sessions[response_id]
             return None
-        # Renew TTL: bump last_accessed_at so the session stays alive on access
         record.last_accessed_at = time.time()
-        # SessionRecord.__init__ deep-copies to isolate from caller mutations.
-        # The stored record is already isolated (saved via copy), so constructing
-        # a new SessionRecord here provides a safe independent copy to the caller.
-        returned = SessionRecord(record.messages, record.tool_context, record.model, created_at=record.created_at)
+        returned = SessionRecord(
+            record.messages,
+            record.tool_context,
+            record.model,
+            created_at=record.created_at,
+            reasoning_cache=record.reasoning_cache,
+        )
         returned.last_accessed_at = record.last_accessed_at
         return returned
 
@@ -81,17 +160,15 @@ class SessionStore:
         """Save session state, triggering lazy cleanup.
 
         Constructs a new SessionRecord (which deep-copies) so the stored
-        data is fully isolated from the caller's references.  This way
-        get() also returns a deep-copied SessionRecord, giving each
-        consumer its own isolated snapshot.
+        data is fully isolated from the caller's references.
         """
         now = time.time()
-        # Deep-copy via SessionRecord constructor to isolate stored data
         new_record = SessionRecord(
             record.messages,
             record.tool_context,
             record.model,
             created_at=now,
+            reasoning_cache=record.reasoning_cache,
         )
         new_record.last_accessed_at = now
         self._sessions[response_id] = new_record
@@ -152,10 +229,6 @@ def _assistant_message_from_chat_body(chat_body: dict) -> ChatMessage | None:
     if not content and not tool_calls and not refusal and not reasoning_content:
         return None
     if not content:
-        # Refusal text is semantically distinct from content, but ChatMessage
-        # has no refusal field.  Preserve refusal as content with a typed
-        # prefix so it survives session replay without conflating it with
-        # normal assistant text.
         if refusal:
             content = f"[refusal]: {refusal}"
         else:
@@ -172,11 +245,7 @@ def _merge_tool_contexts(
     existing: BridgeToolContext,
     payload: ResponsesRequest,
 ) -> BridgeToolContext:
-    """Merge tools from a new request into an existing session's tool context.
-
-    Preserves all tools from the previous session; adds new tools from
-    the current request that aren't already registered.
-    """
+    """Merge tools from a new request into an existing session's tool context."""
     merged = copy.deepcopy(existing)
     merged.merge(build_tool_context_from_request(payload))
     return merged
@@ -189,6 +258,10 @@ def resolve_session(
 
     The returned messages are the session's full saved history (deep-copied, safe to modify).
     tool_context has been merged with the new request's tools.
+
+    Before returning, ``apply_reasoning_cache`` restores cached reasoning
+    into assistant messages that would otherwise lose their thinking across
+    tool-call turns.
     """
     prev_id = getattr(payload, "previous_response_id", None)
     if not prev_id:
@@ -199,7 +272,9 @@ def resolve_session(
     if record is None:
         return None, None, None
 
-    # Merge new request tools into the session's tool context
+    # Restore cached reasoning before returning messages to the caller.
+    apply_reasoning_cache(record.messages, record.reasoning_cache)
+
     merged_context = _merge_tool_contexts(record.tool_context, payload)
 
     return record.messages, merged_context, record.model
@@ -214,9 +289,13 @@ def save_session(
 ) -> None:
     """Save a session snapshot. If assistant_message is provided, it is appended to messages before persisting.
 
-    SessionRecord deep-copies messages and tool_context on construction,
-    so it is safe to modify them before passing them in.
+    After persisting messages, the reasoning cache is extracted from all
+    messages (including the appended assistant_message) and stored so
+    that subsequent ``resolve_session`` can restore prior thinking.
     """
     saved_messages = [*messages, assistant_message] if assistant_message is not None else messages
+    cache = extract_reasoning_cache(saved_messages)
     store = get_session_store()
-    store.save(response_id, SessionRecord(saved_messages, tool_context, model))
+    store.save(response_id, SessionRecord(
+        saved_messages, tool_context, model, reasoning_cache=cache,
+    ))
