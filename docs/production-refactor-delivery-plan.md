@@ -296,7 +296,22 @@ PY
 - `git diff --stat` 清晰
 - 每个 commit 都能单独解释
 - 全量测试绿
-- systemd 重启后 smoke 绿
+- systemd 重启后 health 绿
+- `deepseek-v4-flash-codex` top-layer canary 绿
+- explicit namespace `tool_choice` stream probe 绿
+
+### 当前 Phase D 进展（2026-07-02）
+
+已完成：
+
+- `pytest -q` -> `197 passed, 1 warning`
+- `systemctl restart codex-chat-bridge.service` + `/health` -> PASS
+- `deepseek-v4-flash-codex` CLI 基础问答 -> PASS
+- `deepseek-v4-flash-codex` CLI 工具调用 -> PASS
+- explicit namespace `tool_choice` stream probe -> PASS
+- 新增：
+  - `docs/release-rollout-checklist.md`
+  - `docs/refactor-delivery-audit.md`
 
 ### 回滚策略
 - 代码回滚：`git revert <commit>` 或恢复到当前基线提交
