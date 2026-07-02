@@ -1,11 +1,30 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
-from .reasoning_policy import ReasoningRequestState, build_reasoning_fallback_state, _error_mentions
+from .reasoning_policy import (
+    CanonicalReasoningEffort,
+    ReasoningRequestState,
+    ReasoningWireMode,
+    _error_mentions,
+    build_reasoning_fallback_state,
+)
+
+Body = dict[str, Any]
+CompatPredicate = Callable[[Body, str], bool]
+CompatRewrite = Callable[[Body], Body]
 
 
-def _rewrite_fields(body: dict[str, Any], **updates: Any) -> dict[str, Any]:
+@dataclass(frozen=True, slots=True)
+class GenericCompatRule:
+    label: str
+    matches: CompatPredicate
+    rewrite: CompatRewrite
+
+
+def _rewrite_fields(body: Body, **updates: Any) -> Body:
     rewritten = dict(body)
     for key, value in updates.items():
         if value is None:
@@ -15,47 +34,65 @@ def _rewrite_fields(body: dict[str, Any], **updates: Any) -> dict[str, Any]:
     return rewritten
 
 
-def _top_p_out_of_range(body: dict[str, Any], error_body: str) -> bool:
+def _next_state(
+    state: ReasoningRequestState,
+    *,
+    body: Body,
+    canonical_effort: CanonicalReasoningEffort | None = None,
+    wire_mode: ReasoningWireMode | None = None,
+) -> ReasoningRequestState:
+    return ReasoningRequestState(
+        body=body,
+        canonical_effort=canonical_effort or state.canonical_effort,
+        wire_mode=wire_mode or state.wire_mode,
+    )
+
+
+def _top_p_out_of_range(body: Body, error_body: str) -> bool:
     return body.get("top_p") is not None and _error_mentions(error_body, "top_p")
 
 
-def _apply_top_p_clamp(body: dict[str, Any]) -> dict[str, Any]:
+def _apply_top_p_clamp(body: Body) -> Body:
     return _rewrite_fields(body, top_p=0.999)
 
 
-def _stream_options_rejected(body: dict[str, Any], error_body: str) -> bool:
+def _stream_options_rejected(body: Body, error_body: str) -> bool:
     return body.get("stream_options") is not None and _error_mentions(error_body, "stream_options")
 
 
-def _apply_strip_stream_options(body: dict[str, Any]) -> dict[str, Any]:
+def _apply_strip_stream_options(body: Body) -> Body:
     return _rewrite_fields(body, stream_options=None)
 
 
-def _include_usage_rejected(body: dict[str, Any], error_body: str) -> bool:
+def _include_usage_rejected(body: Body, error_body: str) -> bool:
     opts = body.get("stream_options")
     return isinstance(opts, dict) and opts.get("include_usage") is True and _error_mentions(error_body, "include_usage")
 
 
-def _apply_disable_include_usage(body: dict[str, Any]) -> dict[str, Any]:
+def _apply_disable_include_usage(body: Body) -> Body:
     opts = dict(body.get("stream_options") or {})
     opts["include_usage"] = False
     return _rewrite_fields(body, stream_options=opts)
 
 
-def _parallel_tool_calls_rejected(body: dict[str, Any], error_body: str) -> bool:
+def _parallel_tool_calls_rejected(body: Body, error_body: str) -> bool:
     return body.get("parallel_tool_calls") is not None and _error_mentions(error_body, "parallel_tool_calls")
 
 
-def _apply_strip_parallel_tool_calls(body: dict[str, Any]) -> dict[str, Any]:
+def _apply_strip_parallel_tool_calls(body: Body) -> Body:
     return _rewrite_fields(body, parallel_tool_calls=None)
 
 
-_GENERIC_COMPAT_RULES: list[tuple[str, Any, Any]] = [
-    ("top_p_out_of_range", _top_p_out_of_range, _apply_top_p_clamp),
-    ("include_usage_rejected", _include_usage_rejected, _apply_disable_include_usage),
-    ("stream_options_rejected", _stream_options_rejected, _apply_strip_stream_options),
-    ("parallel_tool_calls_rejected", _parallel_tool_calls_rejected, _apply_strip_parallel_tool_calls),
-]
+def _has_explicit_tool_choice_object(body: Body) -> bool:
+    return isinstance(body.get("tool_choice"), dict)
+
+
+_GENERIC_COMPAT_RULES: tuple[GenericCompatRule, ...] = (
+    GenericCompatRule("top_p_out_of_range", _top_p_out_of_range, _apply_top_p_clamp),
+    GenericCompatRule("include_usage_rejected", _include_usage_rejected, _apply_disable_include_usage),
+    GenericCompatRule("stream_options_rejected", _stream_options_rejected, _apply_strip_stream_options),
+    GenericCompatRule("parallel_tool_calls_rejected", _parallel_tool_calls_rejected, _apply_strip_parallel_tool_calls),
+)
 
 
 class UpstreamCompatPolicy:
@@ -64,14 +101,9 @@ class UpstreamCompatPolicy:
         state: ReasoningRequestState,
         error_body: str,
     ) -> tuple[str, ReasoningRequestState] | None:
-        for label, check, apply in _GENERIC_COMPAT_RULES:
-            if check(state.body, error_body):
-                retried_body = apply(state.body)
-                return label, ReasoningRequestState(
-                    body=retried_body,
-                    canonical_effort=state.canonical_effort,
-                    wire_mode=state.wire_mode,
-                )
+        for rule in _GENERIC_COMPAT_RULES:
+            if rule.matches(state.body, error_body):
+                return rule.label, _next_state(state, body=rule.rewrite(state.body))
         return None
 
     def explicit_tool_choice_thinking_mode_retry_state(
@@ -90,15 +122,15 @@ class UpstreamCompatPolicy:
         """
         if state.canonical_effort != "unspecified":
             return None
-        if not isinstance(state.body.get("tool_choice"), dict):
+        if not _has_explicit_tool_choice_object(state.body):
             return None
         if not _error_mentions(error_body, "tool_choice"):
             return None
         if not _error_mentions(error_body, "thinking mode"):
             return None
-        retried_body = _rewrite_fields(state.body, thinking=None, reasoning_effort="none")
-        return "explicit_tool_choice_disable_reasoning", ReasoningRequestState(
-            body=retried_body,
+        return "explicit_tool_choice_disable_reasoning", _next_state(
+            state,
+            body=_rewrite_fields(state.body, thinking=None, reasoning_effort="none"),
             canonical_effort="none",
             wire_mode="effort_only",
         )
@@ -114,11 +146,9 @@ class UpstreamCompatPolicy:
             return None
         if not _error_mentions(error_body, "thinking"):
             return None
-        retried_body = _rewrite_fields(state.body, thinking=None)
-        return "unsupported_thinking_strip_raw_thinking", ReasoningRequestState(
-            body=retried_body,
-            canonical_effort=state.canonical_effort,
-            wire_mode="provider_default",
+        return "unsupported_thinking_strip_raw_thinking", _next_state(
+            state,
+            body=_rewrite_fields(state.body, thinking=None),
         )
 
     def retry_state(
