@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
 
 from .bridge_context import BridgeToolContext
 from .protocol.sse import extract_block, parse_sse_block
@@ -38,20 +37,6 @@ async def _iter_sse_messages(upstream_stream: AsyncIterator[bytes]) -> AsyncIter
             if not data:
                 continue
             yield event_name, data
-
-
-def _extract_reasoning_delta(delta: dict) -> str:
-    for key in ("reasoning_content", "reasoning"):
-        value = delta.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
-
-
-def _parse_choice(payload: dict) -> tuple[dict, dict]:
-    choice = (payload.get("choices") or [{}])[0]
-    delta = choice.get("delta") or {}
-    return choice, delta
 
 
 def _flush_reasoning_and_inline_think(state: ResponsesStreamState) -> list[bytes]:
@@ -121,12 +106,6 @@ def _structured_content_events(
     return events
 
 
-def _refusal_events(state: ResponsesStreamState, refusal: Any) -> list[bytes]:
-    if not isinstance(refusal, str) or not refusal:
-        return []
-    return [*state.finalize_reasoning_if_open(), *state.push_refusal_part(refusal)]
-
-
 def _process_sse_message(
     event_name: str | None,
     data: str,
@@ -179,9 +158,15 @@ def _process_chat_chunk(
 
     state.apply_chunk_metadata(payload)
     events = state.ensure_started()
-    choice, delta = _parse_choice(payload)
+    choice = (payload.get("choices") or [{}])[0]
+    delta = choice.get("delta") or {}
 
-    reasoning_delta = _extract_reasoning_delta(delta)
+    reasoning_delta = ""
+    for key in ("reasoning_content", "reasoning"):
+        value = delta.get(key)
+        if isinstance(value, str) and value:
+            reasoning_delta = value
+            break
     if reasoning_delta:
         events.extend(state.push_reasoning_delta(reasoning_delta))
 
@@ -197,7 +182,10 @@ def _process_chat_chunk(
     elif isinstance(content, list):
         events.extend(_structured_content_events(state, content))
 
-    events.extend(_refusal_events(state, delta.get("refusal")))
+    refusal = delta.get("refusal")
+    if isinstance(refusal, str) and refusal:
+        events.extend(state.finalize_reasoning_if_open())
+        events.extend(state.push_refusal_part(refusal))
 
     finish_reason = choice.get("finish_reason")
     if isinstance(finish_reason, str) and finish_reason:

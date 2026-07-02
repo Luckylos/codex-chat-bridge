@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
@@ -17,7 +18,10 @@ from codex_chat_bridge.config import Settings
 from codex_chat_bridge.errors import InvalidRequestError, UnsupportedInputItemError
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.protocol.session import _assistant_message_from_chat_body
-from codex_chat_bridge.stream_chat_to_responses import _chat_message_to_fake_delta
+from codex_chat_bridge.stream_chat_to_responses import (
+    _chat_message_to_fake_delta,
+    create_responses_sse_stream_from_chat_stream,
+)
 from codex_chat_bridge.stream_responses_state import ResponsesStreamState
 from codex_chat_bridge.stream_state.envelope import ResponseEnvelopeState
 from codex_chat_bridge.stream_state.message import MessageState
@@ -250,6 +254,28 @@ def test_reasoning_state_appends_completed_item_to_envelope() -> None:
             "summary": [{"type": "summary_text", "text": "Need context."}],
         }
     ]
+
+
+def test_stream_accepts_reasoning_field_alias_in_chat_delta() -> None:
+    async def upstream_stream():
+        payload = {
+            "id": "chatcmpl_reasoning_alias",
+            "model": "demo-model",
+            "choices": [{"delta": {"reasoning": "Need context."}, "finish_reason": "stop"}],
+        }
+        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+
+    async def collect() -> str:
+        parts: list[str] = []
+        async for chunk in create_responses_sse_stream_from_chat_stream(upstream_stream()):
+            parts.append(chunk.decode())
+        return "".join(parts)
+
+    output = asyncio.run(collect())
+    compact = output.replace(" ", "")
+    assert "event: response.reasoning_summary_text.done" in output
+    assert '"text":"Needcontext."' in compact
 
 
 def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> None:
