@@ -37,6 +37,13 @@ class ToolKind:
         return "function_call"
 
 
+@dataclass(frozen=True)
+class CompletedToolEmission:
+    item: dict
+    arguments: str
+    input_text: str | None
+
+
 def resolve_tool_kind(tool_context: BridgeToolContext, name: str | None) -> ToolKind:
     return ToolKind(
         is_custom=tool_context.is_custom_tool(name),
@@ -52,6 +59,12 @@ def ensure_tool_identity(state: ToolCallState, index: int, kind: ToolKind) -> No
     state.item_id = f"ctc_{state.call_id}" if kind.is_custom else f"fc_{state.call_id}"
 
 
+def _with_reasoning_content(state: ToolCallState, item: dict) -> dict:
+    if state.reasoning_content:
+        item["reasoning_content"] = state.reasoning_content
+    return item
+
+
 def build_in_progress_item(state: ToolCallState, kind: ToolKind) -> dict:
     item = {
         "id": state.item_id,
@@ -64,46 +77,59 @@ def build_in_progress_item(state: ToolCallState, kind: ToolKind) -> dict:
         "arguments": {} if kind.is_tool_search else ("" if not kind.is_custom else None),
     }
     item = {key: value for key, value in item.items() if value is not None}
-    if state.reasoning_content:
-        item["reasoning_content"] = state.reasoning_content
-    return item
+    return _with_reasoning_content(state, item)
 
 
-def build_completed_item(state: ToolCallState, kind: ToolKind) -> tuple[dict, str, str | None]:
-    arguments = canonicalize_tool_arguments(state.arguments)
-    if kind.is_custom:
-        input_text = custom_tool_input_from_chat_arguments(arguments)
-        item = {
+def _custom_completed_item(state: ToolCallState, arguments: str) -> CompletedToolEmission:
+    input_text = custom_tool_input_from_chat_arguments(arguments)
+    item = _with_reasoning_content(
+        state,
+        {
             "id": state.item_id,
             "type": "custom_tool_call",
             "status": "completed",
             "call_id": state.call_id,
             "name": state.name,
             "input": input_text,
-        }
-        if state.reasoning_content:
-            item["reasoning_content"] = state.reasoning_content
-        return item, arguments, input_text
-    if kind.is_tool_search:
-        item = {
+        },
+    )
+    return CompletedToolEmission(item=item, arguments=arguments, input_text=input_text)
+
+
+def _tool_search_completed_item(state: ToolCallState, arguments: str) -> CompletedToolEmission:
+    item = _with_reasoning_content(
+        state,
+        {
             "id": state.item_id,
             "type": "tool_search_call",
             "status": "completed",
             "call_id": state.call_id,
             "execution": "client",
             "arguments": parse_tool_arguments_object(arguments),
-        }
-        if state.reasoning_content:
-            item["reasoning_content"] = state.reasoning_content
-        return item, arguments, None
-    item = {
-        "id": state.item_id,
-        "type": "function_call",
-        "status": "completed",
-        "call_id": state.call_id,
-        "name": state.name,
-        "arguments": arguments,
-    }
-    if state.reasoning_content:
-        item["reasoning_content"] = state.reasoning_content
-    return item, arguments, None
+        },
+    )
+    return CompletedToolEmission(item=item, arguments=arguments, input_text=None)
+
+
+def _function_completed_item(state: ToolCallState, arguments: str) -> CompletedToolEmission:
+    item = _with_reasoning_content(
+        state,
+        {
+            "id": state.item_id,
+            "type": "function_call",
+            "status": "completed",
+            "call_id": state.call_id,
+            "name": state.name,
+            "arguments": arguments,
+        },
+    )
+    return CompletedToolEmission(item=item, arguments=arguments, input_text=None)
+
+
+def build_completed_item(state: ToolCallState, kind: ToolKind) -> CompletedToolEmission:
+    arguments = canonicalize_tool_arguments(state.arguments)
+    if kind.is_custom:
+        return _custom_completed_item(state, arguments)
+    if kind.is_tool_search:
+        return _tool_search_completed_item(state, arguments)
+    return _function_completed_item(state, arguments)

@@ -14,6 +14,7 @@ from .tool_events import (
     output_item_done,
 )
 from .tool_items import (
+    CompletedToolEmission,
     ToolCallState,
     ToolKind,
     build_completed_item,
@@ -103,9 +104,7 @@ class ToolStateStore:
         return True
 
     def _emit_argument_delta(self, state: ToolCallState, kind: ToolKind, delta: str | None) -> list[bytes]:
-        if kind.is_custom:
-            return []
-        if delta is None:
+        if kind.is_custom or delta is None:
             return []
         return [function_arguments_delta(state.item_id, state.output_index, delta)]
 
@@ -154,6 +153,41 @@ class ToolStateStore:
         )
         state.nested_buffered = False
 
+    def _completion_events(
+        self,
+        state: ToolCallState,
+        emission: CompletedToolEmission,
+        kind: ToolKind,
+    ) -> list[bytes]:
+        if kind.is_custom:
+            input_text = emission.input_text or ""
+            events = []
+            if input_text:
+                events.append(custom_input_delta(state.item_id, state.output_index, input_text))
+            events.append(custom_input_done(state.item_id, state.output_index, input_text))
+            return events
+        return [function_arguments_done(state.item_id, state.output_index, emission.arguments)]
+
+    def _finalize_state(
+        self,
+        envelope: ResponseEnvelopeState,
+        state: ToolCallState,
+        index: int,
+    ) -> list[bytes]:
+        self._flush_buffered_nested_state(state)
+        events: list[bytes] = []
+        if not state.added and (state.call_id or state.name):
+            added_events, _ = self._ensure_added(envelope, state, index)
+            events.extend(added_events)
+
+        state.done = True
+        kind = resolve_tool_kind(self.tool_context, state.name)
+        emission = build_completed_item(state, kind)
+        events.extend(self._completion_events(state, emission, kind))
+        events.append(output_item_done(state.output_index, emission.item))
+        envelope.append_completed_item(state.output_index, emission.item)
+        return events
+
     def finalize(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if self.finalized:
             return []
@@ -162,19 +196,5 @@ class ToolStateStore:
         for index, state in sorted(self.tool_calls.items(), key=lambda pair: pair[0]):
             if state.done:
                 continue
-            self._flush_buffered_nested_state(state)
-            if not state.added and (state.call_id or state.name):
-                added_events, _ = self._ensure_added(envelope, state, index)
-                events.extend(added_events)
-            state.done = True
-            kind = resolve_tool_kind(self.tool_context, state.name)
-            item, arguments, input_text = build_completed_item(state, kind)
-            if kind.is_custom:
-                if input_text:
-                    events.append(custom_input_delta(state.item_id, state.output_index, input_text))
-                events.append(custom_input_done(state.item_id, state.output_index, input_text or ""))
-            else:
-                events.append(function_arguments_done(state.item_id, state.output_index, arguments))
-            events.append(output_item_done(state.output_index, item))
-            envelope.append_completed_item(state.output_index, item)
+            events.extend(self._finalize_state(envelope, state, index))
         return events
