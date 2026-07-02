@@ -207,6 +207,46 @@ def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> Non
     assert assistant.content == "A\n[refusal]: No\nB"
 
 
+def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:
+    state = ResponsesStreamState(response_id="resp_tool_calls")
+    state.push_tool_call_delta(
+        {
+            "index": 0,
+            "id": "call_0",
+            "function": {"name": "demo_tool", "arguments": "{\"x\":1}"},
+        },
+        None,
+    )
+    state.set_finish_reason("tool_calls")
+
+    output = b"".join(state.finalize()).decode()
+
+    assert 'event: response.completed' in output
+    assert '"status": "in_progress"' in output
+
+
+def test_stream_finalize_without_finish_reason_and_no_output_emits_failed_event() -> None:
+    state = ResponsesStreamState(response_id="resp_truncated_empty")
+
+    output = b"".join(state.finalize()).decode()
+
+    assert "event: response.failed" in output
+    assert '"type": "stream_truncated"' in output
+
+
+def test_stream_fail_preserves_partial_output_items() -> None:
+    state = ResponsesStreamState(response_id="resp_partial_fail")
+    state.push_reasoning_delta("Need context.")
+    state.push_text_delta("hello")
+
+    output = b"".join(state.fail("bad request", "invalid_request_error")).decode()
+
+    assert "event: response.failed" in output
+    assert '"type": "message"' in output
+    assert '"type": "reasoning"' in output
+    assert '"message": "bad request"' in output
+
+
 def test_response_envelope_preserves_bridge_response_id_when_metadata_has_upstream_id() -> None:
     envelope = ResponseEnvelopeState(response_id="resp_bridge_abc123")
 
