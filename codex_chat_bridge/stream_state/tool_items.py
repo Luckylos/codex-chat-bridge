@@ -16,6 +16,11 @@ class ToolCallState:
     added: bool = False
     done: bool = False
     reasoning_content: str = ""
+    # Nested namespace buffering: when upstream returns a namespace-level
+    # name instead of a concrete action, we delay emitting output_item.added
+    # until we can extract the action from the arguments JSON.
+    nested_buffered: bool = False
+    nested_resolved: bool = False
 
 
 @dataclass(frozen=True)

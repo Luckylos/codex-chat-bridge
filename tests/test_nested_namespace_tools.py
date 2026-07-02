@@ -7,7 +7,7 @@ Covers:
   a single Chat tool with action enum + params.anyOf
 - Default (no strategy / strategy="flat") preserves existing flat behaviour
 - Response-side conversion extracts action from arguments JSON
-- Stream-side detection of namespace-level calls (warn path)
+- Stream-side buffering resolves namespace-level calls before emitting output items
 """
 
 from __future__ import annotations
@@ -18,8 +18,27 @@ from unittest.mock import patch
 
 from codex_chat_bridge.bridge_context import BridgeToolContext, build_tool_context_from_request
 from codex_chat_bridge.bridge_context.models import ToolSpec
-from codex_chat_bridge.models import ResponsesRequest
 from codex_chat_bridge.chat_to_responses.tools import tool_call_to_response_item, _nested_namespace_call_to_response_item
+from codex_chat_bridge.models import ResponsesRequest
+from codex_chat_bridge.stream_state import ResponseEnvelopeState, ToolStateStore
+
+
+def _parse_sse_events(output: str) -> list[tuple[str, dict]]:
+    events: list[tuple[str, dict]] = []
+    event_name: str | None = None
+    data_lines: list[str] = []
+    for line in output.splitlines():
+        if line.startswith("event:"):
+            event_name = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data_lines.append(line.split(":", 1)[1].strip())
+        elif not line.strip() and event_name and data_lines:
+            events.append((event_name, json.loads("\n".join(data_lines))))
+            event_name = None
+            data_lines = []
+    if event_name and data_lines:
+        events.append((event_name, json.loads("\n".join(data_lines))))
+    return events
 
 
 _CLASSIC_FLAT = {
@@ -303,6 +322,75 @@ class NestedNamespaceResponseConversionTests(unittest.TestCase):
         self.assertEqual(item["name"], "apply_patch")
         self.assertEqual(item["namespace"], "codex")
         self.assertEqual(item["reasoning_content"], "patch reasoning")
+
+
+class NestedNamespaceStreamingTests(unittest.TestCase):
+    """Stream-side buffering resolves namespace names before output_item.added."""
+
+    def _make_context(self, strategy: str = "nested_oneof") -> BridgeToolContext:
+        ctx = BridgeToolContext()
+        namespace_tool = dict(_NESTED_ONEOF) if strategy == "nested_oneof" else dict(_NESTED_ANYOF)
+        namespace_tool["strategy"] = strategy
+        ctx.add_namespace_tool(namespace_tool)
+        return ctx
+
+    def _collect_events(self, chunks: list[bytes]) -> list[tuple[str, dict]]:
+        output = "".join(chunk.decode() for chunk in chunks)
+        return _parse_sse_events(output)
+
+    def test_stream_buffers_namespace_name_until_action_is_complete(self) -> None:
+        store = ToolStateStore(self._make_context("nested_oneof"))
+        envelope = ResponseEnvelopeState(response_id="resp_nested_stream")
+
+        first = store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_nested_1",
+                "function": {"name": "codex__codex"},
+            },
+            reasoning=None,
+        )
+        self.assertEqual(first, [])
+
+        second = store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"action":"shell","command":"pwd"}'},
+            },
+            reasoning=None,
+        )
+        events = self._collect_events(second)
+        added_item = next(payload["item"] for event_name, payload in events if event_name == "response.output_item.added")
+        argument_delta = next(
+            payload for event_name, payload in events if event_name == "response.function_call_arguments.delta"
+        )
+
+        self.assertEqual(added_item["name"], "shell")
+        self.assertEqual(argument_delta["delta"], '{"command":"pwd"}')
+
+    def test_stream_finalize_falls_back_to_namespace_name_when_action_never_resolves(self) -> None:
+        store = ToolStateStore(self._make_context("nested_oneof"))
+        envelope = ResponseEnvelopeState(response_id="resp_nested_finalize")
+
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_nested_2",
+                "function": {"name": "codex__codex", "arguments": '{"command":"pwd"}'},
+            },
+            reasoning=None,
+        )
+        finalize_events = self._collect_events(store.finalize(envelope))
+        done_item = next(payload["item"] for event_name, payload in finalize_events if event_name == "response.output_item.done")
+        arguments_done = next(
+            payload for event_name, payload in finalize_events if event_name == "response.function_call_arguments.done"
+        )
+
+        self.assertEqual(done_item["name"], "codex__codex")
+        self.assertEqual(arguments_done["arguments"], '{"command":"pwd"}')
 
 
 class NestedNamespaceEmptyChildrenTests(unittest.TestCase):

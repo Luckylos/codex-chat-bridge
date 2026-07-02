@@ -12,6 +12,7 @@ from .context import BridgeToolContext
 from .custom_tools import custom_tool_input_from_chat_arguments, custom_tool_input_to_chat_arguments, parse_tool_arguments_object
 from .models import ToolSpec
 from .naming import canonical_json_string, flatten_namespace_tool_name
+from .nested_namespace import NestedNamespaceResolution, resolve_nested_namespace_arguments
 
 __all__ = [
     "BridgeToolContext",
@@ -26,5 +27,7 @@ __all__ = [
     "custom_tool_input_to_chat_arguments",
     "flatten_namespace_tool_name",
     "iter_request_input_items",
+    "NestedNamespaceResolution",
     "parse_tool_arguments_object",
+    "resolve_nested_namespace_arguments",
 ]
