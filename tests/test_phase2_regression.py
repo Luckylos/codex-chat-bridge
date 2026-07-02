@@ -279,16 +279,20 @@ def test_stream_accepts_reasoning_field_alias_in_chat_delta() -> None:
     assert '"text":"Needcontext."' in compact
 
 
-def _completed_response_output(sse_output: str) -> list[dict[str, Any]]:
+def _response_payload_for_event(sse_output: str, event_name: str) -> dict[str, Any]:
     for block in sse_output.split("\n\n"):
-        if "event: response.completed" not in block:
+        if f"event: {event_name}" not in block:
             continue
         data_line = next((line for line in block.splitlines() if line.startswith("data: ")), None)
         if data_line is None:
             continue
         payload = json.loads(data_line[6:])
-        return payload["response"]["output"]
-    raise AssertionError("response.completed event not found")
+        return payload["response"]
+    raise AssertionError(f"{event_name} event not found")
+
+
+def _completed_response_output(sse_output: str) -> list[dict[str, Any]]:
+    return _response_payload_for_event(sse_output, "response.completed")["output"]
 
 
 def test_buffered_chat_response_preserves_message_before_tool_call_in_mixed_output() -> None:
@@ -757,6 +761,121 @@ def test_tool_state_interleaved_partial_argument_chunks_preserve_per_call_output
             "reasoning_content": "Need file and search.",
         },
     ]
+
+
+def test_tool_state_custom_input_delta_preserves_chunk_granularity() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    store = ToolStateStore(context)
+    envelope = ResponseEnvelopeState(response_id="resp_custom_input_chunks")
+
+    chunks: list[bytes] = []
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_exec",
+                "function": {"name": "exec"},
+            },
+            reasoning="Need shell.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"input":"p'},
+            },
+            reasoning="Need shell.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": 'w'},
+            },
+            reasoning="Need shell.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": 'd"}'},
+            },
+            reasoning="Need shell.",
+        )
+    )
+    chunks.extend(store.finalize(envelope))
+    output = b"".join(chunks).decode()
+
+    assert output.count("event: response.custom_tool_call_input.delta") == 3
+    assert '"delta": "p"' in output
+    assert '"delta": "w"' in output
+    assert '"delta": "d"' in output
+    assert output.count("event: response.custom_tool_call_input.done") == 1
+    assert envelope.completed_output_items() == [
+        {
+            "id": "ctc_call_exec",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": "pwd",
+            "reasoning_content": "Need shell.",
+        }
+    ]
+
+
+def test_stream_fail_preserves_parallel_mixed_tool_output_order() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    context.add_tool_search_tool()
+    state = ResponsesStreamState(context, response_id="resp_parallel_fail")
+
+    state.push_tool_call_delta({"index": 2, "id": "call_search", "function": {"name": "tool_search"}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "id": "call_exec", "function": {"name": "exec"}}, "Need tools.")
+    state.push_tool_call_delta(
+        {"index": 1, "id": "call_fn", "function": {"name": "read_file", "arguments": '{"path":"/tmp/x"}'}},
+        "Need tools.",
+    )
+    state.push_tool_call_delta({"index": 2, "function": {"arguments": '{"query":"gmail"}'}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "function": {"arguments": '{"input":"pwd"}'}}, "Need tools.")
+
+    output = b"".join(state.fail("bad request", "invalid_request_error")).decode()
+    response = _response_payload_for_event(output, "response.failed")
+
+    assert [item["call_id"] for item in response["output"]] == ["call_exec", "call_fn", "call_search"]
+    assert response["error"]["message"] == "bad request"
+    assert response["error"]["type"] == "invalid_request_error"
+
+
+def test_stream_truncated_preserves_parallel_mixed_tool_output_order() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    context.add_tool_search_tool()
+    state = ResponsesStreamState(context, response_id="resp_parallel_truncated")
+
+    state.push_tool_call_delta({"index": 2, "id": "call_search", "function": {"name": "tool_search"}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "id": "call_exec", "function": {"name": "exec"}}, "Need tools.")
+    state.push_tool_call_delta(
+        {"index": 1, "id": "call_fn", "function": {"name": "read_file", "arguments": '{"path":"/tmp/x"}'}},
+        "Need tools.",
+    )
+    state.push_tool_call_delta({"index": 2, "function": {"arguments": '{"query":"gmail"}'}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "function": {"arguments": '{"input":"pwd"}'}}, "Need tools.")
+
+    output = b"".join(state.finalize()).decode()
+    response = _response_payload_for_event(output, "response.completed")
+
+    assert response["status"] == "incomplete"
+    assert response["incomplete_details"] == {"reason": "stream_truncated"}
+    assert [item["call_id"] for item in response["output"]] == ["call_exec", "call_fn", "call_search"]
 
 
 def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:

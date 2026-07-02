@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..bridge_context import BridgeToolContext, custom_tool_input_from_chat_arguments, parse_tool_arguments_object
+from ..bridge_context import (
+    BridgeToolContext,
+    custom_tool_input_from_chat_arguments,
+    parse_tool_arguments_object,
+)
 from ..tool_arguments import canonicalize_tool_arguments
 
 
@@ -17,6 +21,7 @@ class ToolCallState:
     added: bool = False
     done: bool = False
     reasoning_content: str = ""
+    emitted_custom_input: str = ""
     # Nested namespace buffering: when upstream returns a namespace-level
     # name instead of a concrete action, we delay emitting output_item.added
     # until we can extract the action from the arguments JSON.

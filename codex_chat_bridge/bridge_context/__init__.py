@@ -9,7 +9,12 @@ share one source of truth.
 from .builder import build_tool_context_from_request, collect_tool_search_output_tools, iter_request_input_items
 from .constants import CHAT_TOOL_NAME_MAX_LEN, CUSTOM_TOOL_INPUT_FIELD, TOOL_SEARCH_PROXY_NAME
 from .context import BridgeToolContext
-from .custom_tools import custom_tool_input_from_chat_arguments, custom_tool_input_to_chat_arguments, parse_tool_arguments_object
+from .custom_tools import (
+    custom_tool_input_from_chat_arguments,
+    custom_tool_input_to_chat_arguments,
+    parse_tool_arguments_object,
+    partial_custom_tool_input_from_chat_arguments,
+)
 from .models import ToolSpec
 from .naming import canonical_json_string, flatten_namespace_tool_name
 from .nested_namespace import NestedNamespaceResolution, resolve_nested_namespace_arguments
@@ -29,5 +34,6 @@ __all__ = [
     "iter_request_input_items",
     "NestedNamespaceResolution",
     "parse_tool_arguments_object",
+    "partial_custom_tool_input_from_chat_arguments",
     "resolve_nested_namespace_arguments",
 ]

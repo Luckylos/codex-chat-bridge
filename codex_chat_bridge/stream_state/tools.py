@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import logging
 
-from ..bridge_context import BridgeToolContext, resolve_nested_namespace_arguments
+from ..bridge_context import (
+    BridgeToolContext,
+    partial_custom_tool_input_from_chat_arguments,
+    resolve_nested_namespace_arguments,
+)
 from ..bridge_context.models import ToolSpec
 from .envelope import ResponseEnvelopeState
 from .tool_events import (
@@ -139,6 +143,18 @@ class ToolStateStore:
             events.append(function_arguments_delta(state.item_id, state.output_index, state.arguments))
         return events
 
+    def _custom_input_delta_events(self, state: ToolCallState) -> list[bytes]:
+        prefix = partial_custom_tool_input_from_chat_arguments(state.arguments)
+        if prefix is None or prefix == state.emitted_custom_input:
+            return []
+        if not prefix.startswith(state.emitted_custom_input):
+            state.emitted_custom_input = ""
+        delta = prefix[len(state.emitted_custom_input) :]
+        if not delta:
+            return []
+        state.emitted_custom_input = prefix
+        return [custom_input_delta(state.item_id, state.output_index, delta)]
+
     def push_delta(self, envelope: ResponseEnvelopeState, tool_call: dict, reasoning: str | None) -> list[bytes]:
         if self.finalized:
             return []
@@ -154,10 +170,13 @@ class ToolStateStore:
 
         added_now = not state.added and (state.call_id or state.name)
         events, kind = self._ensure_added(envelope, state, index)
-        if added_now and state.arguments and not kind.is_custom:
+        if kind.is_custom:
+            events.extend(self._custom_input_delta_events(state))
+            return events
+        if added_now and state.arguments:
             events.append(function_arguments_delta(state.item_id, state.output_index, state.arguments))
             return events
-        if not kind.is_custom and args_delta is not None:
+        if args_delta is not None:
             events.append(function_arguments_delta(state.item_id, state.output_index, args_delta))
         return events
 
@@ -189,8 +208,11 @@ class ToolStateStore:
         emission = build_completed_item(state, kind, self.tool_context)
         if kind.is_custom:
             input_text = emission.input_text or ""
-            if input_text:
-                events.append(custom_input_delta(state.item_id, state.output_index, input_text))
+            if input_text != state.emitted_custom_input:
+                residual = input_text[len(state.emitted_custom_input) :] if input_text.startswith(state.emitted_custom_input) else input_text
+                if residual:
+                    events.append(custom_input_delta(state.item_id, state.output_index, residual))
+                state.emitted_custom_input = input_text
             events.append(custom_input_done(state.item_id, state.output_index, input_text))
         else:
             events.append(function_arguments_done(state.item_id, state.output_index, emission.arguments))
