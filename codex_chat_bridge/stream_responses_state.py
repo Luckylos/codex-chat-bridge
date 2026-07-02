@@ -86,37 +86,32 @@ class ResponsesStreamState:
         events.append(self.envelope.failed_event(message, error_type))
         return events
 
-    def _assistant_message_content(self) -> Any:
-        content_parts = self.message.content_parts()
-        if content_parts:
-            return chat_message_content_from_response_content(content_parts)
-        if self.message.text:
-            return self.message.text
-        return None
-
-    def _assistant_tool_calls(self) -> list[dict] | None:
-        tool_call_states = {k: v for k, v in self.tools.tool_calls.items() if v.name}
-        if not tool_call_states:
-            return None
-
-        chat_tool_calls: list[dict] = []
-        for index, state in sorted(tool_call_states.items(), key=lambda pair: pair[0]):
-            chat_tool_calls.append(
-                {
-                    "id": state.call_id or f"call_{index}",
-                    "type": "function",
-                    "function": {
-                        "name": state.name,
-                        "arguments": state.arguments,
-                    },
-                }
-            )
-        return chat_tool_calls
-
     def build_assistant_message(self) -> ChatMessage | None:
         """Build an assistant ChatMessage for session persistence."""
-        tool_calls = self._assistant_tool_calls()
-        content = self._assistant_message_content()
+        tool_call_states = {k: v for k, v in self.tools.tool_calls.items() if v.name}
+        tool_calls: list[dict] | None = None
+        if tool_call_states:
+            tool_calls = []
+            for index, state in sorted(tool_call_states.items(), key=lambda pair: pair[0]):
+                tool_calls.append(
+                    {
+                        "id": state.call_id or f"call_{index}",
+                        "type": "function",
+                        "function": {
+                            "name": state.name,
+                            "arguments": state.arguments,
+                        },
+                    }
+                )
+
+        content_parts = self.message.content_parts()
+        content: Any
+        if content_parts:
+            content = chat_message_content_from_response_content(content_parts)
+        elif self.message.text:
+            content = self.message.text
+        else:
+            content = None
         has_visible_content = content is not None
 
         if not has_visible_content and not tool_calls and not self.reasoning.text:

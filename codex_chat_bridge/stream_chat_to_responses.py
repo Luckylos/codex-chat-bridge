@@ -23,11 +23,6 @@ def _new_stream_state(
     return state
 
 
-def _capture_stream_state(state: ResponsesStreamState, captured_state: list | None) -> None:
-    if captured_state is not None:
-        captured_state.append(state)
-
-
 async def _iter_sse_messages(upstream_stream: AsyncIterator[bytes]) -> AsyncIterator[tuple[str | None, str]]:
     buffer = ""
     async for chunk in upstream_stream:
@@ -132,12 +127,6 @@ def _refusal_events(state: ResponsesStreamState, refusal: Any) -> list[bytes]:
     return [*state.finalize_reasoning_if_open(), *state.push_refusal_part(refusal)]
 
 
-def _finish_reason_events(state: ResponsesStreamState, finish_reason: str | None) -> list[bytes]:
-    if isinstance(finish_reason, str) and finish_reason:
-        state.set_finish_reason(finish_reason)
-    return []
-
-
 def _process_sse_message(
     event_name: str | None,
     data: str,
@@ -173,11 +162,14 @@ async def create_responses_sse_stream_from_chat_stream(
         for event in state.fail(f"Stream error: {exc}"):
             yield event
     finally:
-        _capture_stream_state(state, _captured_state)
+        if _captured_state is not None:
+            _captured_state.append(state)
 
 
 def _process_chat_chunk(
-    payload: dict, event_name: str | None, state: ResponsesStreamState
+    payload: dict,
+    event_name: str | None,
+    state: ResponsesStreamState,
 ) -> list[bytes]:
     """Process a single Chat Completions chunk through the state machine.
     Returns list of SSE event bytes. Used by both streaming and non-streaming paths."""
@@ -206,7 +198,10 @@ def _process_chat_chunk(
         events.extend(_structured_content_events(state, content))
 
     events.extend(_refusal_events(state, delta.get("refusal")))
-    events.extend(_finish_reason_events(state, choice.get("finish_reason")))
+
+    finish_reason = choice.get("finish_reason")
+    if isinstance(finish_reason, str) and finish_reason:
+        state.set_finish_reason(finish_reason)
     return events
 
 

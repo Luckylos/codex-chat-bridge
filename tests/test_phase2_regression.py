@@ -224,6 +224,29 @@ def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> Non
     assert assistant.content == "A\n[refusal]: No\nB"
 
 
+def test_stream_assistant_message_preserves_tool_calls_and_reasoning_for_replay() -> None:
+    state = ResponsesStreamState(response_id="resp_stream_tools")
+
+    state.push_reasoning_delta("Need tool first.")
+    state.push_tool_call_delta(
+        {
+            "index": 0,
+            "id": "call_weather",
+            "function": {"name": "weather", "arguments": '{"city":"Seoul"}'},
+        },
+        "Need tool first.",
+    )
+    state.set_finish_reason("tool_calls")
+    state.finalize()
+
+    assistant = state.build_assistant_message()
+    assert assistant is not None
+    assert assistant.tool_calls is not None
+    assert assistant.tool_calls[0]["id"] == "call_weather"
+    assert assistant.tool_calls[0]["function"]["name"] == "weather"
+    assert assistant.reasoning_content == "Need tool first."
+
+
 def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:
     state = ResponsesStreamState(response_id="resp_tool_calls")
     state.push_tool_call_delta(
