@@ -12,40 +12,54 @@ class ReasoningState:
         self.done = False
         self.output_index: int = 0
 
+    def _reasoning_item_in_progress(self, envelope: ResponseEnvelopeState) -> dict:
+        return {
+            "id": envelope.reasoning_item_id,
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": [],
+        }
+
+    def _reasoning_item_completed(self, envelope: ResponseEnvelopeState) -> dict:
+        return {
+            "id": envelope.reasoning_item_id,
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": self.text}],
+        }
+
+    def _summary_part(self) -> dict:
+        return {"type": "summary_text", "text": self.text}
+
+    def _ensure_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
+        if self.item_added:
+            return []
+        self.item_added = True
+        self.output_index = envelope.allocate_output_index()
+        return [
+            sse_event(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": self.output_index,
+                    "item": self._reasoning_item_in_progress(envelope),
+                },
+            ),
+            sse_event(
+                "response.reasoning_summary_part.added",
+                {
+                    "type": "response.reasoning_summary_part.added",
+                    "item_id": envelope.reasoning_item_id,
+                    "output_index": self.output_index,
+                    "summary_index": 0,
+                    "part": {"type": "summary_text", "text": ""},
+                },
+            ),
+        ]
+
     def push_delta(self, envelope: ResponseEnvelopeState, delta: str) -> list[bytes]:
         if self.done:
             return []
-        events: list[bytes] = []
-        if not self.item_added:
-            self.item_added = True
-            self.output_index = envelope.allocate_output_index()
-            events.append(
-                sse_event(
-                    "response.output_item.added",
-                    {
-                        "type": "response.output_item.added",
-                        "output_index": self.output_index,
-                        "item": {
-                            "id": envelope.reasoning_item_id,
-                            "type": "reasoning",
-                            "status": "in_progress",
-                            "summary": [],
-                        },
-                    },
-                )
-            )
-            events.append(
-                sse_event(
-                    "response.reasoning_summary_part.added",
-                    {
-                        "type": "response.reasoning_summary_part.added",
-                        "item_id": envelope.reasoning_item_id,
-                        "output_index": self.output_index,
-                        "summary_index": 0,
-                        "part": {"type": "summary_text", "text": ""},
-                    },
-                )
-            )
+        events = self._ensure_started(envelope)
         self.text += delta
         events.append(
             sse_event(
@@ -65,11 +79,8 @@ class ReasoningState:
         if not self.item_added or self.done:
             return []
         self.done = True
-        item = {
-            "id": envelope.reasoning_item_id,
-            "type": "reasoning",
-            "summary": [{"type": "summary_text", "text": self.text}],
-        }
+        item = self._reasoning_item_completed(envelope)
+        summary_part = self._summary_part()
         envelope.append_completed_item(self.output_index, item)
         return [
             sse_event(
@@ -89,7 +100,7 @@ class ReasoningState:
                     "item_id": envelope.reasoning_item_id,
                     "output_index": self.output_index,
                     "summary_index": 0,
-                    "part": {"type": "summary_text", "text": self.text},
+                    "part": summary_part,
                 },
             ),
             sse_event(
