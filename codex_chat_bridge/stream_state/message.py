@@ -182,6 +182,14 @@ class MessageState:
             content_part_done(envelope.message_item_id, self.output_index, content_index, text_part),
         ]
 
+    def flush_open_text_part(self, envelope: ResponseEnvelopeState) -> list[bytes]:
+        if self.item_done:
+            return []
+        segment = self._current_text_segment()
+        if segment is None:
+            return []
+        return self._finalize_text_segment(envelope, segment)
+
     def finalize(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if not self.item_added or self.item_done:
             return []

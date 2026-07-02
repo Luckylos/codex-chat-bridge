@@ -162,6 +162,69 @@ class StreamingContentRefusalSemanticsTests(unittest.TestCase):
             compact,
         )
 
+    def test_buffered_chat_response_preserves_distinct_text_parts_in_same_content_array(self) -> None:
+        chat_body = {
+            "id": "chatcmpl_buffered_multi_text",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Hel"},
+                            {"type": "output_text", "text": "lo"},
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_from_chat_response(chat_body):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        output = asyncio.run(collect())
+        compact = output.replace(" ", "")
+        self.assertGreaterEqual(compact.count("event:response.content_part.added"), 2)
+        self.assertGreaterEqual(compact.count("event:response.output_text.done"), 2)
+        self.assertIn(
+            '"content":[{"type":"output_text","text":"Hel","annotations":[]},{"type":"output_text","text":"lo","annotations":[]}]',
+            compact,
+        )
+
+    def test_buffered_chat_response_closes_text_part_before_refusal_in_same_content_array(self) -> None:
+        chat_body = {
+            "id": "chatcmpl_buffered_text_then_refusal",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Hello"},
+                            {"type": "refusal", "refusal": "No."},
+                        ],
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_from_chat_response(chat_body):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        output = asyncio.run(collect())
+        self.assertLess(
+            output.index("event: response.output_text.done"),
+            output.index('"refusal": "No."'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

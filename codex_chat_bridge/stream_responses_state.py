@@ -51,6 +51,9 @@ class ResponsesStreamState:
     def push_refusal_part(self, refusal: str) -> list[bytes]:
         return self.message.push_refusal_part(self.envelope, refusal)
 
+    def flush_open_text_part(self) -> list[bytes]:
+        return self.message.flush_open_text_part(self.envelope)
+
     def set_finish_reason(self, finish_reason: str) -> None:
         self.envelope.finish_reason = finish_reason
 

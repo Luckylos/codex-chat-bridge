@@ -92,9 +92,11 @@ def _structured_content_events(
     content: list,
 ) -> list[bytes]:
     events = _flush_reasoning_and_inline_think(state)
-    for part in content:
+    for index, part in enumerate(content):
         if not isinstance(part, dict):
             continue
+        if index > 0:
+            events.extend(state.flush_open_text_part())
         part_type = part.get("type")
         if part_type in {"text", "output_text"} and isinstance(part.get("text"), str) and part.get("text"):
             state.message.add_annotations(part.get("annotations"))
