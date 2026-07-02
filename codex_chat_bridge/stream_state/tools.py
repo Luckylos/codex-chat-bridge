@@ -42,6 +42,11 @@ class ToolStateStore:
         self.tool_calls: dict[int, ToolCallState] = {}
         self.finalized = False
 
+    def _ensure_output_index(self, envelope: ResponseEnvelopeState, state: ToolCallState) -> int:
+        if state.output_index is None:
+            state.output_index = envelope.allocate_output_index()
+        return state.output_index
+
     def _ensure_added(
         self,
         envelope: ResponseEnvelopeState,
@@ -53,9 +58,9 @@ class ToolStateStore:
         state.added = True
         kind = resolve_tool_kind(self.tool_context, state.name)
         ensure_tool_identity(state, index, kind)
-        state.output_index = envelope.allocate_output_index()
+        output_index = self._ensure_output_index(envelope, state)
         item = build_in_progress_item(state, kind, self.tool_context)
-        return [output_item_added(state.output_index, item)], kind
+        return [output_item_added(output_index, item)], kind
 
     def _apply_tool_call_delta(self, state: ToolCallState, tool_call: dict, reasoning: str | None) -> str | None:
         if tool_call.get("id"):
@@ -72,7 +77,7 @@ class ToolStateStore:
             state.reasoning_content = reasoning
         return args_delta if isinstance(args_delta, str) and args_delta else None
 
-    def _maybe_start_nested_buffer(self, state: ToolCallState) -> None:
+    def _maybe_start_nested_buffer(self, envelope: ResponseEnvelopeState, state: ToolCallState) -> None:
         if state.added or state.nested_buffered or state.nested_resolved:
             return
         spec = _nested_namespace_spec(self.tool_context, state.name)
@@ -83,6 +88,7 @@ class ToolStateStore:
             state.name,
             spec.actions,
         )
+        self._ensure_output_index(envelope, state)
         state.nested_buffered = True
 
     def _try_resolve_nested_buffer(self, state: ToolCallState) -> bool:
@@ -126,7 +132,7 @@ class ToolStateStore:
         args_delta = self._apply_tool_call_delta(state, tool_call, reasoning)
 
         if not state.added and (state.call_id or state.name):
-            self._maybe_start_nested_buffer(state)
+            self._maybe_start_nested_buffer(envelope, state)
         if state.nested_buffered:
             return self._emit_buffered_nested_events(envelope, state, index)
 

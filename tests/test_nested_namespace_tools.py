@@ -371,6 +371,59 @@ class NestedNamespaceStreamingTests(unittest.TestCase):
         self.assertEqual(added_item["namespace"], "codex")
         self.assertEqual(argument_delta["delta"], '{"command":"pwd"}')
 
+    def test_parallel_namespace_calls_keep_output_order_by_tool_index_when_resolution_interleaves(self) -> None:
+        store = ToolStateStore(self._make_context("nested_oneof"))
+        envelope = ResponseEnvelopeState(response_id="resp_nested_parallel")
+
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_a",
+                "function": {"name": "codex__codex"},
+            },
+            reasoning="Need both.",
+        )
+        store.push_delta(
+            envelope,
+            {
+                "index": 1,
+                "id": "call_b",
+                "function": {"name": "codex__codex"},
+            },
+            reasoning="Need both.",
+        )
+        second = store.push_delta(
+            envelope,
+            {
+                "index": 1,
+                "function": {"arguments": '{"action":"apply_patch","patch":"x"}'},
+            },
+            reasoning="Need both.",
+        )
+        third = store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"action":"shell","command":"pwd"}'},
+            },
+            reasoning="Need both.",
+        )
+        events = self._collect_events(second + third + store.finalize(envelope))
+        added_items = [
+            (payload["output_index"], payload["item"]["call_id"])
+            for event_name, payload in events
+            if event_name == "response.output_item.added"
+        ]
+
+        self.assertEqual(added_items, [(1, "call_b"), (0, "call_a")])
+        self.assertEqual(envelope.completed_output_items()[0]["call_id"], "call_a")
+        self.assertEqual(envelope.completed_output_items()[0]["name"], "shell")
+        self.assertEqual(envelope.completed_output_items()[0]["namespace"], "codex")
+        self.assertEqual(envelope.completed_output_items()[1]["call_id"], "call_b")
+        self.assertEqual(envelope.completed_output_items()[1]["name"], "apply_patch")
+        self.assertEqual(envelope.completed_output_items()[1]["namespace"], "codex")
+
     def test_stream_finalize_falls_back_to_namespace_name_when_action_never_resolves(self) -> None:
         store = ToolStateStore(self._make_context("nested_oneof"))
         envelope = ResponseEnvelopeState(response_id="resp_nested_finalize")

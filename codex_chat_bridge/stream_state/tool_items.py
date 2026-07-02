@@ -8,7 +8,7 @@ from ..tool_arguments import canonicalize_tool_arguments
 
 @dataclass
 class ToolCallState:
-    output_index: int = 0
+    output_index: int | None = None
     item_id: str = ""
     call_id: str = ""
     name: str = ""
