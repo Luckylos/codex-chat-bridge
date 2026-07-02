@@ -577,6 +577,67 @@ def test_stream_assistant_message_preserves_nested_namespace_chat_tool_shape_for
     assert assistant.reasoning_content == "Need shell."
 
 
+def test_stream_assistant_message_preserves_chat_side_tool_shapes_for_replay_across_flat_custom_and_tool_search() -> None:
+    flat_context = BridgeToolContext()
+    flat_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "flat",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    custom_context = BridgeToolContext()
+    custom_context.add_custom_tool({"type": "custom", "name": "exec"})
+    search_context = BridgeToolContext()
+    search_context.add_tool_search_tool()
+
+    cases = [
+        (
+            flat_context,
+            {"index": 0, "id": "call_flat", "function": {"name": "codex__shell", "arguments": '{"command":"pwd"}'}},
+            "codex__shell",
+            '{"command":"pwd"}',
+        ),
+        (
+            custom_context,
+            {"index": 0, "id": "call_exec", "function": {"name": "exec", "arguments": '{"input":"pwd"}'}},
+            "exec",
+            '{"input":"pwd"}',
+        ),
+        (
+            search_context,
+            {"index": 0, "id": "call_search", "function": {"name": "tool_search", "arguments": '{"query":"gmail"}'}},
+            "tool_search",
+            '{"query":"gmail"}',
+        ),
+    ]
+
+    for idx, (context, tool_call, expected_name, expected_arguments) in enumerate(cases):
+        state = ResponsesStreamState(context, response_id=f"resp_stream_shape_{idx}")
+        state.push_tool_call_delta(tool_call, None)
+        state.set_finish_reason("tool_calls")
+        state.finalize()
+
+        assistant = state.build_assistant_message()
+        assert assistant is not None
+        assert assistant.tool_calls is not None
+        assert assistant.tool_calls[0]["function"]["name"] == expected_name
+        assert assistant.tool_calls[0]["function"]["arguments"] == expected_arguments
+
+
 def test_stream_saved_session_resolves_nested_namespace_chat_tool_shape_for_replay() -> None:
     tool_context = BridgeToolContext()
     tool_context.add_namespace_tool(
@@ -1269,7 +1330,7 @@ def test_stream_upstream_streaming_does_not_persist_failed_streams() -> None:
     with patch("codex_chat_bridge.api.response_service.create_responses_sse_stream_from_chat_stream", fake_stream):
         response = asyncio.run(
             response_service._stream_upstream_streaming(
-                DummyClient(),
+                cast(Any, DummyClient()),
                 chat_request,
                 BridgeToolContext(),
                 "resp_bridge_failed",
@@ -1314,7 +1375,7 @@ def test_stream_upstream_streaming_persists_successful_streams() -> None:
     with patch("codex_chat_bridge.api.response_service.create_responses_sse_stream_from_chat_stream", fake_stream):
         response = asyncio.run(
             response_service._stream_upstream_streaming(
-                DummyClient(),
+                cast(Any, DummyClient()),
                 chat_request,
                 BridgeToolContext(),
                 "resp_bridge_completed",
@@ -1327,6 +1388,176 @@ def test_stream_upstream_streaming_persists_successful_streams() -> None:
     args, kwargs = saves[0]
     assert args[0] == "resp_bridge_completed"
     assert kwargs["assistant_message"] == assistant_message
+
+
+def test_stream_upstream_streaming_persists_nested_namespace_assistant_shape_for_session_save() -> None:
+    tool_context = BridgeToolContext()
+    tool_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "nested_oneof",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    class DummyClient:
+        def stream_chat_completion(self, payload):
+            async def _stream():
+                payloads = [
+                    {
+                        "id": "chatcmpl_nested_stream",
+                        "model": "demo-model",
+                        "choices": [
+                            {
+                                "delta": {
+                                    "reasoning_content": "Need shell.",
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_nested",
+                                            "type": "function",
+                                            "function": {"name": "codex__codex"},
+                                        }
+                                    ],
+                                }
+                            }
+                        ],
+                    },
+                    {
+                        "id": "chatcmpl_nested_stream",
+                        "model": "demo-model",
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "function": {"arguments": '{"action":"shell","command":"pwd"}'},
+                                        }
+                                    ]
+                                },
+                                "finish_reason": "tool_calls",
+                            }
+                        ],
+                    },
+                ]
+                for payload in payloads:
+                    yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+                yield b"data: [DONE]\n\n"
+
+            return _stream()
+
+    saves: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    chat_request = SimpleNamespace(messages=[], model="demo-model")
+    deps = response_service.ServiceDependencies(
+        save_session=lambda *args, **kwargs: saves.append((args, kwargs)),
+    )
+
+    response = asyncio.run(
+        response_service._stream_upstream_streaming(
+            cast(Any, DummyClient()),
+            chat_request,
+            tool_context,
+            "resp_bridge_nested_stream",
+            deps=deps,
+        )
+    )
+    asyncio.run(_collect_stream_chunks(response))
+
+    assert len(saves) == 1
+    assistant = saves[0][1]["assistant_message"]
+    assert assistant is not None
+    assert assistant.tool_calls is not None
+    assert assistant.tool_calls[0]["function"]["name"] == "codex__codex"
+    assert assistant.tool_calls[0]["function"]["arguments"] == '{"action":"shell","command":"pwd"}'
+    assert assistant.reasoning_content == "Need shell."
+
+
+def test_stream_buffer_then_sse_persists_nested_namespace_assistant_shape_for_session_save() -> None:
+    tool_context = BridgeToolContext()
+    tool_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "nested_oneof",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    chat_body = {
+        "id": "chatcmpl_nested_buffered",
+        "model": "demo-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "reasoning_content": "Need shell.",
+                    "tool_calls": [
+                        {
+                            "id": "call_nested",
+                            "type": "function",
+                            "function": {"name": "codex__codex", "arguments": '{"action":"shell","command":"pwd"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    class DummyClient:
+        async def create_chat_completion(self, payload):
+            return chat_body
+
+    saves: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+    chat_request = SimpleNamespace(messages=[], model="demo-model")
+    deps = response_service.ServiceDependencies(
+        save_session=lambda *args, **kwargs: saves.append((args, kwargs)),
+    )
+
+    response = asyncio.run(
+        response_service._stream_buffer_then_sse(
+            cast(Any, DummyClient()),
+            chat_request,
+            tool_context,
+            "resp_bridge_nested_buffered",
+            deps=deps,
+        )
+    )
+    asyncio.run(_collect_stream_chunks(response))
+
+    assert len(saves) == 1
+    assistant = saves[0][1]["assistant_message"]
+    assert assistant is not None
+    assert assistant.tool_calls is not None
+    assert assistant.tool_calls[0]["function"]["name"] == "codex__codex"
+    assert assistant.tool_calls[0]["function"]["arguments"] == '{"action":"shell","command":"pwd"}'
+    assert assistant.reasoning_content == "Need shell."
 
 
 def test_assistant_message_from_chat_body_preserves_refusal_only_turns() -> None:
