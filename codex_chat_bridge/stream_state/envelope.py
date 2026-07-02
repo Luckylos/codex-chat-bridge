@@ -43,15 +43,6 @@ class ResponseEnvelopeState:
         """Store the original Responses request for echo-back in finalize."""
         self._request_echo = original_request
 
-    def _apply_request_echo(self, response: dict) -> None:
-        """Write request-echo fields into the response dict."""
-        if not self._request_echo:
-            return
-        for key in REQUEST_ECHO_FIELDS:
-            value = self._request_echo.get(key)
-            if value is not None:
-                response[key] = value
-
     def allocate_output_index(self) -> int:
         idx = self.next_output_index
         self.next_output_index += 1
@@ -68,7 +59,11 @@ class ResponseEnvelopeState:
             "output": output,
             "usage": self.usage or {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         }
-        self._apply_request_echo(response)
+        if self._request_echo:
+            for key in REQUEST_ECHO_FIELDS:
+                value = self._request_echo.get(key)
+                if value is not None:
+                    response[key] = value
         return response
 
     def ensure_started(self) -> list[bytes]:

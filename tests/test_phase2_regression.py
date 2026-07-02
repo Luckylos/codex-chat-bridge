@@ -386,6 +386,21 @@ def test_response_envelope_completed_event_applies_finish_reason_mapping_and_req
     assert '"metadata": {"trace": "abc"}' in output
 
 
+def test_response_envelope_failed_event_preserves_request_echo_and_completed_items() -> None:
+    envelope = ResponseEnvelopeState(response_id="resp_bridge_failed")
+    envelope.set_request_echo({"instructions": "be terse", "metadata": {"trace": "failed"}})
+    envelope.append_completed_item(1, {"id": "item_1", "type": "message"})
+
+    output = envelope.failed_event("bad request", "invalid_request_error").decode()
+
+    assert 'event: response.failed' in output
+    assert '"instructions": "be terse"' in output
+    assert '"metadata": {"trace": "failed"}' in output
+    assert '"message": "bad request"' in output
+    assert '"type": "invalid_request_error"' in output
+    assert '"output": [{"id": "item_1", "type": "message"}]' in output
+
+
 def test_response_envelope_ensure_started_emits_created_and_in_progress_once() -> None:
     envelope = ResponseEnvelopeState(response_id="resp_started_once")
 
