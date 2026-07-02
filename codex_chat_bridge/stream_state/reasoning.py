@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
-from .envelope import ResponseEnvelopeState, sse_event
+from .envelope import ResponseEnvelopeState
+from .tool_events import (
+    output_item_added,
+    output_item_done,
+    reasoning_summary_part_added,
+    reasoning_summary_part_done,
+    reasoning_summary_text_delta,
+    reasoning_summary_text_done,
+)
 
 
 class ReasoningState:
@@ -36,23 +44,12 @@ class ReasoningState:
         self.item_added = True
         self.output_index = envelope.allocate_output_index()
         return [
-            sse_event(
-                "response.output_item.added",
-                {
-                    "type": "response.output_item.added",
-                    "output_index": self.output_index,
-                    "item": self._reasoning_item_in_progress(envelope),
-                },
-            ),
-            sse_event(
-                "response.reasoning_summary_part.added",
-                {
-                    "type": "response.reasoning_summary_part.added",
-                    "item_id": envelope.reasoning_item_id,
-                    "output_index": self.output_index,
-                    "summary_index": 0,
-                    "part": {"type": "summary_text", "text": ""},
-                },
+            output_item_added(self.output_index, self._reasoning_item_in_progress(envelope)),
+            reasoning_summary_part_added(
+                envelope.reasoning_item_id,
+                self.output_index,
+                0,
+                {"type": "summary_text", "text": ""},
             ),
         ]
 
@@ -62,15 +59,11 @@ class ReasoningState:
         events = self._ensure_started(envelope)
         self.text += delta
         events.append(
-            sse_event(
-                "response.reasoning_summary_text.delta",
-                {
-                    "type": "response.reasoning_summary_text.delta",
-                    "item_id": envelope.reasoning_item_id,
-                    "output_index": self.output_index,
-                    "summary_index": 0,
-                    "delta": delta,
-                },
+            reasoning_summary_text_delta(
+                envelope.reasoning_item_id,
+                self.output_index,
+                0,
+                delta,
             )
         )
         return events
@@ -83,34 +76,19 @@ class ReasoningState:
         summary_part = self._summary_part()
         envelope.append_completed_item(self.output_index, item)
         return [
-            sse_event(
-                "response.reasoning_summary_text.done",
-                {
-                    "type": "response.reasoning_summary_text.done",
-                    "item_id": envelope.reasoning_item_id,
-                    "output_index": self.output_index,
-                    "summary_index": 0,
-                    "text": self.text,
-                },
+            reasoning_summary_text_done(
+                envelope.reasoning_item_id,
+                self.output_index,
+                0,
+                self.text,
             ),
-            sse_event(
-                "response.reasoning_summary_part.done",
-                {
-                    "type": "response.reasoning_summary_part.done",
-                    "item_id": envelope.reasoning_item_id,
-                    "output_index": self.output_index,
-                    "summary_index": 0,
-                    "part": summary_part,
-                },
+            reasoning_summary_part_done(
+                envelope.reasoning_item_id,
+                self.output_index,
+                0,
+                summary_part,
             ),
-            sse_event(
-                "response.output_item.done",
-                {
-                    "type": "response.output_item.done",
-                    "output_index": self.output_index,
-                    "item": item,
-                },
-            ),
+            output_item_done(self.output_index, item),
         ]
 
     def active_text_for_tools(self) -> str:

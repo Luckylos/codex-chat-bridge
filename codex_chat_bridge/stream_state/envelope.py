@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import time
 
-from ..protocol.sse import sse_event
 from ..response_semantics import (
     REQUEST_ECHO_FIELDS,
     incomplete_reason_from_finish_reason,
     map_chat_usage,
     response_status_from_finish_reason,
 )
+from .tool_events import response_event
 
 
 class ResponseEnvelopeState:
@@ -72,7 +72,7 @@ class ResponseEnvelopeState:
         return response
 
     def _response_event(self, event_name: str, response: dict) -> bytes:
-        return sse_event(event_name, {"type": event_name, "response": response})
+        return response_event(event_name, response)
 
     def ensure_started(self) -> list[bytes]:
         if self.response_started:

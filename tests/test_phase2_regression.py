@@ -289,6 +289,16 @@ def test_response_envelope_completed_event_applies_finish_reason_mapping_and_req
     assert '"metadata": {"trace": "abc"}' in output
 
 
+def test_response_envelope_ensure_started_emits_created_and_in_progress_once() -> None:
+    envelope = ResponseEnvelopeState(response_id="resp_started_once")
+
+    output = b"".join(envelope.ensure_started()).decode()
+
+    assert "event: response.created" in output
+    assert "event: response.in_progress" in output
+    assert envelope.ensure_started() == []
+
+
 def test_chat_message_to_fake_delta_injects_indexes_for_parallel_tool_calls() -> None:
     delta = _chat_message_to_fake_delta(
         {

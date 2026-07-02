@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from .envelope import ResponseEnvelopeState, sse_event
+from .envelope import ResponseEnvelopeState
+from .tool_events import (
+    content_part_added,
+    content_part_done,
+    output_item_added,
+    output_item_done,
+    output_text_delta,
+    output_text_done,
+)
 
 
 class MessageState:
@@ -79,15 +87,11 @@ class MessageState:
         content_index: int,
         part: dict,
     ) -> bytes:
-        return sse_event(
-            "response.content_part.added",
-            {
-                "type": "response.content_part.added",
-                "item_id": envelope.message_item_id,
-                "output_index": self.output_index,
-                "content_index": content_index,
-                "part": part,
-            },
+        return content_part_added(
+            envelope.message_item_id,
+            self.output_index,
+            content_index,
+            part,
         )
 
     def _content_part_done_event(
@@ -97,15 +101,11 @@ class MessageState:
         content_index: int,
         part: dict,
     ) -> bytes:
-        return sse_event(
-            "response.content_part.done",
-            {
-                "type": "response.content_part.done",
-                "item_id": envelope.message_item_id,
-                "output_index": self.output_index,
-                "content_index": content_index,
-                "part": part,
-            },
+        return content_part_done(
+            envelope.message_item_id,
+            self.output_index,
+            content_index,
+            part,
         )
 
     def _ensure_message_item_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
@@ -113,16 +113,7 @@ class MessageState:
             return []
         self.item_added = True
         self.output_index = envelope.allocate_output_index()
-        return [
-            sse_event(
-                "response.output_item.added",
-                {
-                    "type": "response.output_item.added",
-                    "output_index": self.output_index,
-                    "item": self._message_item_in_progress(envelope),
-                },
-            )
-        ]
+        return [output_item_added(self.output_index, self._message_item_in_progress(envelope))]
 
     def _start_text_segment(self, envelope: ResponseEnvelopeState) -> tuple[dict[str, Any], list[bytes]]:
         events = self._ensure_message_item_started(envelope)
@@ -161,15 +152,11 @@ class MessageState:
 
         segment["text"] += delta
         events.append(
-            sse_event(
-                "response.output_text.delta",
-                {
-                    "type": "response.output_text.delta",
-                    "item_id": envelope.message_item_id,
-                    "output_index": self.output_index,
-                    "content_index": segment["content_index"],
-                    "delta": delta,
-                },
+            output_text_delta(
+                envelope.message_item_id,
+                self.output_index,
+                segment["content_index"],
+                delta,
             )
         )
         return events
@@ -224,15 +211,11 @@ class MessageState:
         self.parts[content_index] = text_part
         segment["part"] = text_part
         return [
-            sse_event(
-                "response.output_text.done",
-                {
-                    "type": "response.output_text.done",
-                    "item_id": envelope.message_item_id,
-                    "output_index": self.output_index,
-                    "content_index": content_index,
-                    "text": segment["text"],
-                },
+            output_text_done(
+                envelope.message_item_id,
+                self.output_index,
+                content_index,
+                segment["text"],
             ),
             self._content_part_done_event(envelope, content_index=content_index, part=text_part),
         ]
@@ -250,14 +233,5 @@ class MessageState:
 
         item = self._message_item_completed(envelope)
         envelope.append_completed_item(self.output_index or 0, item)
-        events.append(
-            sse_event(
-                "response.output_item.done",
-                {
-                    "type": "response.output_item.done",
-                    "output_index": self.output_index,
-                    "item": item,
-                },
-            )
-        )
+        events.append(output_item_done(self.output_index, item))
         return events
