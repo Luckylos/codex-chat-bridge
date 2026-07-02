@@ -85,9 +85,11 @@ class ToolStateStore:
         name = function.get("name")
         if name:
             state.name = str(name)
+            state.chat_name = str(name)
         args_delta = function.get("arguments")
         if isinstance(args_delta, str) and args_delta:
             state.arguments += args_delta
+            state.chat_arguments += args_delta
         if reasoning and not state.reasoning_content:
             state.reasoning_content = reasoning
         return args_delta if isinstance(args_delta, str) and args_delta else None

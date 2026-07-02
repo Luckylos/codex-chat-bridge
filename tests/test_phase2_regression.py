@@ -17,7 +17,11 @@ from codex_chat_bridge.bridge_context import BridgeToolContext
 from codex_chat_bridge.config import Settings
 from codex_chat_bridge.errors import InvalidRequestError, UnsupportedInputItemError
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
-from codex_chat_bridge.protocol.session import _assistant_message_from_chat_body
+from codex_chat_bridge.protocol.session import (
+    _assistant_message_from_chat_body,
+    resolve_session,
+    save_session,
+)
 from codex_chat_bridge.stream_chat_to_responses import (
     _chat_message_to_fake_delta,
     create_responses_sse_from_chat_response,
@@ -527,6 +531,111 @@ def test_stream_assistant_message_preserves_tool_calls_and_reasoning_for_replay(
     assert assistant.tool_calls[0]["id"] == "call_weather"
     assert assistant.tool_calls[0]["function"]["name"] == "weather"
     assert assistant.reasoning_content == "Need tool first."
+
+
+def test_stream_assistant_message_preserves_nested_namespace_chat_tool_shape_for_replay() -> None:
+    tool_context = BridgeToolContext()
+    tool_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "nested_oneof",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    state = ResponsesStreamState(tool_context, response_id="resp_stream_nested_tools")
+
+    state.push_reasoning_delta("Need shell.")
+    state.push_tool_call_delta(
+        {
+            "index": 0,
+            "id": "call_nested",
+            "function": {"name": "codex__codex", "arguments": '{"action":"shell","command":"pwd"}'},
+        },
+        "Need shell.",
+    )
+    state.set_finish_reason("tool_calls")
+    state.finalize()
+
+    assistant = state.build_assistant_message()
+    assert assistant is not None
+    assert assistant.tool_calls is not None
+    assert assistant.tool_calls[0]["function"]["name"] == "codex__codex"
+    assert assistant.tool_calls[0]["function"]["arguments"] == '{"action":"shell","command":"pwd"}'
+    assert assistant.reasoning_content == "Need shell."
+
+
+def test_stream_saved_session_resolves_nested_namespace_chat_tool_shape_for_replay() -> None:
+    tool_context = BridgeToolContext()
+    tool_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "nested_oneof",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    state = ResponsesStreamState(tool_context, response_id="resp_stream_nested_session")
+
+    state.push_reasoning_delta("Need shell.")
+    state.push_tool_call_delta(
+        {
+            "index": 0,
+            "id": "call_nested",
+            "function": {"name": "codex__codex", "arguments": '{"action":"shell","command":"pwd"}'},
+        },
+        "Need shell.",
+    )
+    state.set_finish_reason("tool_calls")
+    state.finalize()
+
+    assistant = state.build_assistant_message()
+    assert assistant is not None
+    save_session("resp_stream_nested_session", [], tool_context, "demo-model", assistant_message=assistant)
+
+    payload = ResponsesRequest.model_validate(
+        {
+            "model": "demo-model",
+            "previous_response_id": "resp_stream_nested_session",
+            "input": "continue",
+        }
+    )
+    msgs, merged_ctx, model = resolve_session(payload)
+
+    assert msgs is not None
+    assistants = [msg for msg in msgs if msg.role == "assistant"]
+    assert len(assistants) == 1
+    assert assistants[0].tool_calls is not None
+    assert assistants[0].tool_calls[0]["function"]["name"] == "codex__codex"
+    assert assistants[0].tool_calls[0]["function"]["arguments"] == '{"action":"shell","command":"pwd"}'
+    assert assistants[0].reasoning_content == "Need shell."
+    assert merged_ctx is not None
+    assert any(tool["function"]["name"] == "codex__codex" for tool in merged_ctx.chat_tools)
+    assert model == "demo-model"
 
 
 def test_tool_state_finalize_custom_tool_preserves_reasoning_and_done_events() -> None:

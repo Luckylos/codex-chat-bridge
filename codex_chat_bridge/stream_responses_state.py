@@ -101,8 +101,8 @@ class ResponsesStreamState:
                         "id": state.call_id or f"call_{index}",
                         "type": "function",
                         "function": {
-                            "name": state.name,
-                            "arguments": state.arguments,
+                            "name": state.chat_name or state.name,
+                            "arguments": state.chat_arguments or state.arguments,
                         },
                     }
                 )

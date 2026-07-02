@@ -16,8 +16,10 @@ class ToolCallState:
     item_id: str = ""
     call_id: str = ""
     name: str = ""
+    chat_name: str = ""
     namespace: str | None = None
     arguments: str = ""
+    chat_arguments: str = ""
     added: bool = False
     done: bool = False
     reasoning_content: str = ""
