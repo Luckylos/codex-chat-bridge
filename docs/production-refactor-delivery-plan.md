@@ -219,6 +219,18 @@ curl -fsS http://127.0.0.1:18090/health
 ### 建议新增文档
 - `docs/compatibility-smoke-matrix.md`
 - `docs/alias-surface-validation.md`
+- `docs/production-smoke.md`
+
+### 当前 Phase B 进展（2026-07-02）
+
+已完成：
+
+- `docs/compatibility-smoke-matrix.md`
+- `docs/alias-surface-validation.md`
+- `docs/production-smoke.md`
+- 关键 smoke 复核：
+  - `deepseek-v4-flash-codex`：当前 PASS（alias visible, `/v1/responses` PASS, CLI PASS, tool PASS, continuation PASS, nested namespace PASS, explicit tool_choice PASS）
+  - `glm-5.1-codex`：当前 BLOCKED（`/v1/models` 不可见，CLI / `/v1/responses` 返回 `No available channel for model glm-5.1-codex under group default`）
 
 ### 验证
 至少保留下面三条作为生产 smoke：
