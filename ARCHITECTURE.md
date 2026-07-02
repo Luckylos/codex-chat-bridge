@@ -35,7 +35,7 @@ codex_chat_bridge/
 │   ├── models.py                   # ToolSpec 轻量数据 + nested namespace 元信息
 │   ├── naming.py                   # namespace flatten / hash / restore
 │   ├── nested_namespace.py         # shared nested namespace action normalize + nested_anyof params flatten
-│   ├── custom_tools.py             # custom tool 参数编解码 + tool_search 对象化
+│   ├── custom_tools.py             # custom tool 参数编解码 + partial streamed input prefix 解析 + tool_search 对象化
 │   ├── context.py                  # BridgeToolContext 聚合 + tool schema 注册
 │   └── builder.py                  # request input 遍历 + context 构建 (tool_search_output 提前 return)
 │
@@ -61,12 +61,12 @@ codex_chat_bridge/
 │   └── __init__.py                 # convert = chat_text_to_responses (对称入口)
 │
 ├── stream_chat_to_responses.py     # SSE block 解析 + 事件路由 + termination/error + debug logging
-├── stream_responses_state.py       # 流式状态机 facade (finalize events on fail)
+├── stream_responses_state.py       # 流式状态机 facade（fail/truncated finalize；assistant replay 保留 chat-side tool shape）
 ├── stream_state/                   # 状态机子模块
 │   ├── envelope.py                 # response envelope + reasoning/usage/finish 元数据 (import REQUEST_ECHO_FIELDS)
 │   ├── message.py                  # assistant message + output_text/refusal parts (annotations on added+done)
 │   ├── reasoning.py                # reasoning item + summary 事件
-│   ├── tools.py                    # tool call 状态编排 + state store (consistent item_id)
+│   ├── tools.py                    # tool call 状态编排 + state store（stable output_index by tool index；custom input incremental deltas；raw chat-side replay fields）
 │   ├── tool_items.py               # ToolCallState + kind 解析 + item 构造 (tool_search_call 有稳定 id)
 │   └── tool_events.py              # tool SSE events 发射器
 │
@@ -142,7 +142,7 @@ bridge_error_response() → JSONResponse (正确 status_code + error body)
 - 21 P2: 4 处代码去重, 3 处死代码, response_format 双写消除, o-series regex, builder quadratic fix, 等
 - 4 P3: 死常量, sentinel type, events 声明位置
 
-**截至 2026-07-02：Phase A/B 收口完成，当前全量测试 197 passed, 1 warning。**
+**截至 2026-07-02：Phase A/B 收口后的 post-closure refactor ladder 已继续推进到 stream/session fidelity 收口；当前全量测试 246 passed, 1 warning。**
 
 ## Policy Matrix（当前冻结）
 

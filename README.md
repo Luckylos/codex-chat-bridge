@@ -83,7 +83,7 @@ bridge 将调用方的 reasoning 强度归一化为四档 canonical effort：
 
 - 非流式 + 流式 Responses ↔ Chat 双向转换
 - 文本 / 图片 / `input_audio` / refusal / reasoning / function-call / custom-tool / tool-search 已覆盖
-- `previous_response_id` 会话延续（messages 深拷贝隔离 + tool_context 合并 + TTL 自动续期）
+- `previous_response_id` 会话延续（messages 深拷贝隔离 + tool_context 合并 + TTL 自动续期；streamed assistant replay 保留 chat-side tool shape）
 - Hosted Responses tools 行为可配置：`ignore` / `reject` / `passthrough`
 - 不做多上游路由、provider 管理、本地 CLI
 
@@ -104,5 +104,5 @@ bridge 将调用方的 reasoning 强度归一化为四档 canonical effort：
 ## 测试
 
 ```bash
-.venv/bin/python -m pytest tests/ -v    # 197 tests
+.venv/bin/python -m pytest tests/ -v    # 当前基线：246 passed, 1 warning
 ```

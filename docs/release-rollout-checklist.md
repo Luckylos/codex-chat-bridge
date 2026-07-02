@@ -24,7 +24,7 @@ _更新时间：2026-07-02_
 
 ### 2.2 测试
 - [x] `pytest -q` 全绿
-- [x] 当前基线：`197 passed, 1 warning`
+- [x] 当前基线：`246 passed, 1 warning`
 
 ### 2.3 服务健康
 - [x] `systemctl restart codex-chat-bridge.service`
@@ -33,11 +33,11 @@ _更新时间：2026-07-02_
 ### 2.4 Top-layer canary
 - [x] `hermes chat --provider custom:newapi -m deepseek-v4-flash-codex -Q --yolo -q '请只回复 OK'`
 - [x] `hermes chat --provider custom:newapi -m deepseek-v4-flash-codex -Q --yolo -q '请使用一个工具读取 /etc/hostname，并且最终只输出主机名，不要附加解释。'`
-- [x] explicit namespace `tool_choice` stream probe 返回 `shell` + `{"command":"pwd"}`
+- [x] explicit namespace `tool_choice` raw bridge stream probe（`model=deepseek-v4-flash`）返回 `shell` + `{"command":"pwd"}`
 
 ---
 
-## 3. 当前建议发布提交链
+### 3. 当前建议发布提交链
 
 ```text
 5587e41 refactor(protocol): unify nested namespace normalization and streaming buffering
@@ -47,9 +47,13 @@ baea3cc docs: add phase-a closure checklist and production refactor delivery pla
 740719d docs: add phase-b smoke matrix and alias-surface validation baseline
 e549953 docs: de-scope glm-5.1-codex from current phase-b acceptance
 8e70c1c docs: sync readme architecture and freeze docs for phase-c baseline
+...
+30c8fdf fix(stream): preserve chat-side nested tool calls for session replay
+ac92b9c test(stream): lock replay and save-path shape regressions
+ff25e46 test(stream): lock tool-search replay and request-echo regressions
 ```
 
-> 说明：Phase D 当前是发布前核对阶段，尚未包含远端 push。
+> 说明：Phase D 之后，post-closure ladder 又补了 stream/session fidelity 收口提交；当前仍未包含远端 push。
 
 ---
 

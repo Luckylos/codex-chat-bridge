@@ -35,20 +35,16 @@ _更新时间：2026-07-02_
 
 当前分支：`main`
 
-当前未提交工作树（本轮已验证通过的在研变更）：
+当前状态：
 
-- `codex_chat_bridge/bridge_context/__init__.py`
-- `codex_chat_bridge/bridge_context/models.py`
-- `codex_chat_bridge/bridge_context/nested_namespace.py` _(new)_
-- `codex_chat_bridge/chat_to_responses/tools.py`
-- `codex_chat_bridge/stream_responses_state.py`
-- `codex_chat_bridge/stream_state/envelope.py`
-- `codex_chat_bridge/stream_state/tool_items.py`
-- `codex_chat_bridge/stream_state/tools.py`
-- `codex_chat_bridge/upstream_compat.py`
-- `tests/test_nested_namespace_tools.py`
-- `tests/test_phase2_regression.py`
-- `tests/test_upstream_compat.py` _(new)_
+- post-closure refactor ladder 的 stream/session fidelity 收敛已完成并全部本地落库
+- 工作树当前应以 clean baseline 为准，不再存在 Phase A 初始计划里那批待切分 dirty worktree
+- 最近连续交付的关键提交已覆盖：
+  - streamed nested namespace session replay
+  - flat/custom/tool_search replay shape
+  - custom input incremental delta + escape fidelity
+  - failed/truncated mixed lifecycle ordering
+  - request-echo terminal semantics
 
 ### 2.2 当前已完成的 live 验证事实
 
@@ -60,31 +56,34 @@ _更新时间：2026-07-02_
 - `deepseek-v4-flash-codex` 真实工具调用验证
 - nested namespace `nested_oneof` / `nested_anyof` 的真实流式 action 解析验证
 - explicit namespace `tool_choice` 路径已通过 compat retry 修复并验证
+- flat namespace / custom / tool_search 的 chat-side replay shape 已回归锁定
+- streamed nested namespace session replay / save_session / resolve_session 已通过
+- custom input incremental delta（含 split unicode / escaped quote）已回归锁定
+- failed / truncated mixed lifecycle + request echo terminal semantics 已回归锁定
+- 当前全量测试基线：`246 passed, 1 warning`
 - `glm-5.1-codex` 已降级为历史参考：其主力上游失效，不再作为当前阶段的主验收目标
 
-### 2.3 当前工作树分组（Phase A 实施边界）
+### 2.3 当前交付状态（已从 Phase A dirty worktree 阶段前进）
 
-为避免把结构收敛、回放修复、compat 兼容混成一个不可审计的大提交，当前工作树应按以下 3 组收口：
+当前已不再处于 “待切分 dirty worktree” 状态，而是进入：
 
-1. **Group A — nested namespace 共享归一化 + 流式缓冲收敛**
-   - `bridge_context/` + `chat_to_responses/tools.py` + `stream_state/tools.py` + `stream_state/tool_items.py` + `tests/test_nested_namespace_tools.py`
-2. **Group B — stream replay / message item id / assistant persistence 收口**
-   - `stream_responses_state.py` + `stream_state/envelope.py` + `tests/test_phase2_regression.py`
-3. **Group C — explicit namespace tool_choice thinking-mode 兼容收口**
-   - `upstream_compat.py` + `tests/test_upstream_compat.py`
-
-详见：`docs/phase-a-worktree-closure-checklist.md`
+1. **post-closure refactor ladder 持续收口阶段**
+   - stream/session fidelity 剩余高价值边界已连续收口并本地提交
+2. **delivery candidate 阶段**
+   - 当前更适合做文档同步、smoke 基线更新、发布收口核对
+3. **细粒度残余问题阶段**
+   - 若再继续下钻，优先做 consistency / delivery 收尾，而不是回到大块结构拆分
 
 ### 2.4 当前主风险
 
-1. **结构性风险仍大于协议性风险**
-   - 协议高价值主链路已基本闭环，后续主要风险在工程韧性与长期维护复杂度
-2. **兼容逻辑继续散长的风险**
-   - `upstream_compat.py` 持续增长，如不收敛为规则化结构，后续会再次变成 patch bucket
-3. **文档与现实漂移风险**
-   - README 当前仍写 `153 tests`，而 live 已是 `197 passed`
-4. **工作树尚未收口**
-   - 当前已有多文件未提交，需要进入“可提交、可审计、可回滚”的交付化整理阶段
+1. **协议主链路风险已明显下降**
+   - 当前主风险已从大块协议缺口转为 consistency 与 final delivery verification
+2. **文档与现实漂移风险已基本收敛**
+   - 已完成 README / ARCHITECTURE / smoke / release docs 的基线同步，剩余风险在于最终 live 复核而非文档缺页
+3. **发布层验证口径需做最后一次真实链路复核**
+   - release checklist / smoke matrix 已更新，但仍需以最终 service restart + health + top-layer canary 再落一次 live 证据
+4. **当前更大的风险是“测试全绿即视为已交付”**
+   - 所以下一步应完成最终 live 验证与交付总结，而不是继续无限细拆结构
 
 ---
 
@@ -304,7 +303,7 @@ PY
 
 已完成：
 
-- `pytest -q` -> `197 passed, 1 warning`
+- `pytest -q` -> `246 passed, 1 warning`
 - `systemctl restart codex-chat-bridge.service` + `/health` -> PASS
 - `deepseek-v4-flash-codex` CLI 基础问答 -> PASS
 - `deepseek-v4-flash-codex` CLI 工具调用 -> PASS
@@ -312,6 +311,10 @@ PY
 - 新增：
   - `docs/release-rollout-checklist.md`
   - `docs/refactor-delivery-audit.md`
+- 后续 post-closure ladder 已继续收口：
+  - nested namespace streamed replay / save-path equivalence
+  - custom input incremental delta + escape fidelity
+  - tool_search continuation / request-echo terminal regressions
 
 ### 回滚策略
 - 代码回滚：`git revert <commit>` 或恢复到当前基线提交
@@ -369,11 +372,10 @@ PY
 
 建议按下面顺序推进，不要交叉打散：
 
-1. **收口当前 dirty worktree 结构改动**
-2. **补齐兼容矩阵与 smoke 文档**
-3. **同步 README / ARCHITECTURE / freeze docs**
-4. **整理 commit 切分并本地提交**
-5. **做一轮发布前全量验证**
+1. **完成文档与交付基线同步**
+2. **执行最终 live 验证（pytest / service restart / health / top-layer canary）**
+3. **整理最终本地交付总结与回滚口径**
+4. **如用户授权，再进入 push / tag / rollout**
 
 ---
 

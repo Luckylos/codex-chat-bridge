@@ -19,8 +19,8 @@ _更新时间：2026-07-02_
 ### 2.1 代码与服务
 
 - 分支：`main`
-- Phase A 收口提交已完成
-- 当前全量测试：`197 passed, 1 warning`
+- post-closure refactor ladder 已持续落库，本地工作树当前可收口为 clean baseline
+- 当前全量测试：`246 passed, 1 warning`
 - 服务：`codex-chat-bridge.service` 运行中
 - health：`GET /health -> {"ok":true,...}`
 
@@ -83,7 +83,7 @@ _更新时间：2026-07-02_
 | nested namespace `nested_oneof` | NewAPI alias stream | PASS | `added_names/done_names = shell` |
 | nested namespace `nested_anyof` | NewAPI alias stream | PASS | `added_names/done_names = read_file` |
 | explicit namespace `tool_choice` | NewAPI alias stream | PASS | thinking-mode compat retry 后通过 |
-| explicit namespace `tool_choice` | raw bridge stream | PASS | `shell` + `{"command":"pwd"}` |
+| explicit namespace `tool_choice` | raw bridge stream | PASS | `model=deepseek-v4-flash`，`shell` + `{"command":"pwd"}` |
 
 ### 4.2 `glm-5.1-codex`（历史参考）
 

@@ -30,12 +30,14 @@ _更新时间：2026-07-02_
 ### 2.2 协议验证
 已完成：
 
-- 全量测试：`197 passed, 1 warning`
+- 全量测试：`246 passed, 1 warning`
 - `/health`：通过
 - deepseek top-layer canary：通过
 - tool loop：通过
-- continuation：此前已通过并文档化
+- continuation：通过并持续回归
 - explicit namespace `tool_choice`：通过
+- streamed nested namespace session replay：通过
+- custom input incremental delta / mixed lifecycle / request-echo terminal semantics：通过回归收口
 
 结论：**通过**
 
@@ -60,6 +62,7 @@ _更新时间：2026-07-02_
 - 提交链可解释
 - rollback 路径明确
 - 本地无未验证代码残留
+- post-closure refactor ladder 的 stream/session fidelity 收口已完成并回归锁定
 
 结论：**通过**
 
