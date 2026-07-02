@@ -74,6 +74,35 @@ class UpstreamCompatPolicy:
                 )
         return None
 
+    def explicit_tool_choice_thinking_mode_retry_state(
+        self,
+        state: ReasoningRequestState,
+        error_body: str,
+    ) -> tuple[str, ReasoningRequestState] | None:
+        """Retry explicit tool_choice requests with reasoning disabled.
+
+        Some upstreams (verified on deepseek-v4-flash via NewAPI) reject
+        ``tool_choice`` object/required forms while default thinking mode is
+        active, but accept the same payload once reasoning is explicitly
+        disabled. Preserve caller intent when they already set reasoning by
+        only applying this retry to requests whose reasoning mode was
+        originally unspecified.
+        """
+        if state.canonical_effort != "unspecified":
+            return None
+        if not isinstance(state.body.get("tool_choice"), dict):
+            return None
+        if not _error_mentions(error_body, "tool_choice"):
+            return None
+        if not _error_mentions(error_body, "thinking mode"):
+            return None
+        retried_body = _rewrite_fields(state.body, thinking=None, reasoning_effort="none")
+        return "explicit_tool_choice_disable_reasoning", ReasoningRequestState(
+            body=retried_body,
+            canonical_effort="none",
+            wire_mode="effort_only",
+        )
+
     def raw_thinking_strip_retry_state(
         self,
         state: ReasoningRequestState,
@@ -100,6 +129,10 @@ class UpstreamCompatPolicy:
         generic_retry = self.generic_retry_state(state, error_body)
         if generic_retry is not None:
             return generic_retry
+
+        explicit_tool_choice_retry = self.explicit_tool_choice_thinking_mode_retry_state(state, error_body)
+        if explicit_tool_choice_retry is not None:
+            return explicit_tool_choice_retry
 
         reasoning_retry = build_reasoning_fallback_state(state, error_body)
         if reasoning_retry is not None:
