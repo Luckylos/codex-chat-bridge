@@ -225,6 +225,34 @@ class StreamingContentRefusalSemanticsTests(unittest.TestCase):
             output.index('"refusal": "No."'),
         )
 
+    def test_buffered_chat_response_closes_text_part_before_top_level_refusal(self) -> None:
+        chat_body = {
+            "id": "chatcmpl_buffered_text_with_top_level_refusal",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "Hello",
+                        "refusal": "No.",
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_from_chat_response(chat_body):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        output = asyncio.run(collect())
+        self.assertLess(
+            output.index("event: response.output_text.done"),
+            output.index('"refusal": "No."'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

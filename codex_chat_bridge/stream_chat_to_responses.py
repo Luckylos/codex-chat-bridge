@@ -187,6 +187,7 @@ def _process_chat_chunk(
     refusal = delta.get("refusal")
     if isinstance(refusal, str) and refusal:
         events.extend(state.finalize_reasoning_if_open())
+        events.extend(state.flush_open_text_part())
         events.extend(state.push_refusal_part(refusal))
 
     finish_reason = choice.get("finish_reason")
