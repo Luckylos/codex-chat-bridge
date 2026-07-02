@@ -39,7 +39,7 @@ _更新时间：2026-07-02_
 | 模型 alias | NewAPI `/v1/models` | CLIProxy `/v1/models` | 当前结论 |
 |---|---:|---:|---|
 | `deepseek-v4-flash-codex` | PASS | PASS | 当前可见 |
-| `glm-5.1-codex` | FAIL | FAIL | 当前不可见 |
+| `glm-5.1-codex` | N/A | N/A | 已降级为历史参考，不再作为当前验收目标 |
 | `glm-5.2-codex` | PASS | PASS | 当前可见 |
 
 ### 3.1 当前 live 观察
@@ -55,18 +55,17 @@ _更新时间：2026-07-02_
 
 ### 3.2 关于 `glm-5.1-codex`
 
-当前 live 状态已经变化：
+当前用户决策已变更：
 
-- 历史上它曾被恢复并通过过顶层验证
-- 但 **当前时刻**：
-  - `/v1/models` 不再列出它
-  - CLI 也返回：`No available channel for model glm-5.1-codex under group default`
+- `glm-5.1-codex` 的主力上游已经失效
+- 该 alias **不再作为当前阶段的主验收 / 阻塞项**
+- 它保留为历史案例：说明 alias-surface / channel-availability 问题如何与 bridge 协议问题区分
 
 因此，在本矩阵里它当前记为：
 
-- **BLOCKED（不是通过）**
+- **历史参考（非当前验收目标）**
 
-这属于 **alias-surface / channel-availability 问题**，不是本轮 bridge 协议回归问题。
+如果未来用户重新要求恢复这条 alias，再单独启动 channel / distributor / alias export 排查。
 
 ---
 
@@ -86,13 +85,12 @@ _更新时间：2026-07-02_
 | explicit namespace `tool_choice` | NewAPI alias stream | PASS | thinking-mode compat retry 后通过 |
 | explicit namespace `tool_choice` | raw bridge stream | PASS | `shell` + `{"command":"pwd"}` |
 
-### 4.2 `glm-5.1-codex`
+### 4.2 `glm-5.1-codex`（历史参考）
 
-| 场景 | 表面 | 结果 | 说明 |
+| 场景 | 表面 | 当前状态 | 说明 |
 |---|---|---|---|
-| `/v1/models` 可见性 | NewAPI / CLIProxy | BLOCKED | 当前不再列出 |
-| `/v1/responses` 非流式 | NewAPI alias | BLOCKED | `503 model_not_found / no available channel` |
-| Hermes CLI 基础问答 | top-layer CLI | BLOCKED | 3 retries 后 `No available channel` |
+| alias 可见性 / 请求可用性 | NewAPI / CLIProxy / CLI | 不纳入当前验收 | 主力上游已失效，当前用户明确要求不再追踪 |
+| 历史价值 | 故障分类样例 | 保留 | 用于说明 alias/channel blocker 与 bridge 协议回归的区别 |
 
 ### 4.3 `glm-5.2-codex`
 
@@ -158,25 +156,23 @@ No available channel for model glm-5.1-codex under group default
 - `deepseek-v4-flash-codex` 作为当前主验收模型，协议主链路已通过
 - nested namespace / continuation / explicit tool_choice 已进入 live verified 状态
 
-### BLOCKED
-- `glm-5.1-codex` 当前不满足“持续可用 alias”条件
-- 这应作为 **Phase B 当前 live blocker** 记录，而不是被误写成“已通过”
+### 非当前关注目标
+- `glm-5.1-codex` 不再作为当前 Phase B 验收或 blocker
+- 原因：用户已确认其主力上游失效，当前无需继续追踪恢复
 
 ---
 
 ## 7. 建议的 Phase B 后续动作
 
 1. 继续把 `deepseek-v4-flash-codex` 作为 bridge 协议主验收 canary
-2. 把 `glm-5.1-codex` 归类为：
-   - alias/channel availability blocker
-   - 非 bridge 协议回归 blocker
-3. 如需恢复 `glm-5.1-codex`，应优先检查：
+2. 把 `glm-5.1-codex` 作为历史故障案例保留，不再纳入当前 smoke 通过/失败判断
+3. 若未来重新纳入验收，再优先检查：
    - NewAPI channel/group/distributor
    - CLIProxy alias export
-   - channel 62 / CPA Codex 当前 models 可见性
+   - 对应 channel 的 models 可见性
 
 ---
 
 ## 8. 一句话结论
 
-> **当前 live smoke 证明：bridge 协议主链路以 `deepseek-v4-flash-codex` 为 canary 已通过；`glm-5.1-codex` 当前属于 alias/channel availability blocker，而非 bridge 协议回归。**
+> **当前 live smoke 证明：bridge 协议主链路以 `deepseek-v4-flash-codex` 为 canary 已通过；`glm-5.1-codex` 已降级为历史参考，不再作为当前验收目标。**

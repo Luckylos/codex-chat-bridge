@@ -66,29 +66,24 @@ _更新时间：2026-07-02_
 结论：
 - **当前 bridge 主协议 canary = PASS**
 
-## 3.2 `glm-5.1-codex`
+## 3.2 `glm-5.1-codex`（历史参考）
 
 ### 历史事实
 - 历史上它曾被恢复并通过过 top-layer 验证
 - 当时根因修复点在 alias target liveness，而非 bridge 协议修复
 
-### 当前 live 状态
-- `/v1/models` 不再列出它
-- CLI 失败：
-  - `No available channel for model glm-5.1-codex under group default`
-- NewAPI 日志同样显示：
-  - `No available channel for model glm-5.1-codex under group default (distributor)`
+### 当前策略
+- 用户已明确：`glm-5.1-codex` 的主力上游已经失效
+- 因此它 **不再作为当前 Phase B 主验收模型或 blocker**
+- 后续仅在用户重新要求时，才重开 alias / channel / distributor 排查
 
 ### 结论
-这说明当前失败层级是：
+当前文档保留它，仅作为：
 
-- **top-layer alias/channel availability**
+- alias-surface 与 bridge 协议问题的区分样例
+- 历史运维审计线索
 
-而不是：
-
-- raw bridge 协议回归
-
-因此当前不能把 `glm-5.1-codex` 记为 PASS。
+而不是当前生产 smoke 的必测项。
 
 ---
 

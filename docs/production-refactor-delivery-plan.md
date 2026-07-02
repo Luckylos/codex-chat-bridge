@@ -60,7 +60,7 @@ _更新时间：2026-07-02_
 - `deepseek-v4-flash-codex` 真实工具调用验证
 - nested namespace `nested_oneof` / `nested_anyof` 的真实流式 action 解析验证
 - explicit namespace `tool_choice` 路径已通过 compat retry 修复并验证
-- `glm-5.1-codex` 转换层当前已恢复可用（根因是 alias target liveness，而非 bridge 重构本身）
+- `glm-5.1-codex` 已降级为历史参考：其主力上游失效，不再作为当前阶段的主验收目标
 
 ### 2.3 当前工作树分组（Phase A 实施边界）
 
@@ -194,8 +194,8 @@ curl -fsS http://127.0.0.1:18090/health
 1. **建立最小生产兼容矩阵**
    - 模型维度：
      - `deepseek-v4-flash-codex`
-     - `glm-5.1-codex`
      - 必要时 `glm-5.2-codex`
+     - `glm-5.1-codex` 仅作历史案例，不纳入当前主验收
    - 场景维度：
      - 非流式 responses
      - 流式 responses
@@ -230,7 +230,7 @@ curl -fsS http://127.0.0.1:18090/health
 - `docs/production-smoke.md`
 - 关键 smoke 复核：
   - `deepseek-v4-flash-codex`：当前 PASS（alias visible, `/v1/responses` PASS, CLI PASS, tool PASS, continuation PASS, nested namespace PASS, explicit tool_choice PASS）
-  - `glm-5.1-codex`：当前 BLOCKED（`/v1/models` 不可见，CLI / `/v1/responses` 返回 `No available channel for model glm-5.1-codex under group default`）
+  - `glm-5.1-codex`：已降级为历史参考，不再作为当前 Phase B 验收目标（主力上游失效）
 
 ### 验证
 至少保留下面三条作为生产 smoke：
@@ -238,7 +238,9 @@ curl -fsS http://127.0.0.1:18090/health
 ```bash
 hermes chat --provider custom:newapi -m deepseek-v4-flash-codex -Q --yolo -q '请只回复 OK'
 hermes chat --provider custom:newapi -m deepseek-v4-flash-codex -Q --yolo -q '请使用一个工具读取 /etc/hostname，并且最终只输出主机名，不要附加解释。'
-hermes chat --provider custom:newapi -m glm-5.1-codex -Q --yolo -q '请只回复 OK'
+python3 - <<'PY'
+print('run explicit namespace tool_choice stream probe here')
+PY
 ```
 
 ---
@@ -329,9 +331,11 @@ curl -fsS http://127.0.0.1:8317/v1/models -H 'Authorization: Bearer sk-luckyss'
 ```bash
 hermes chat --provider custom:newapi -m deepseek-v4-flash-codex -Q --yolo -q '请只回复 OK'
 hermes chat --provider custom:newapi -m deepseek-v4-flash-codex -Q --yolo -q '请使用一个工具读取 /etc/hostname，并且最终只输出主机名，不要附加解释。'
-hermes chat --provider custom:newapi -m glm-5.1-codex -Q --yolo -q '请只回复 OK'
+python3 - <<'PY'
+print('run explicit namespace tool_choice stream probe here')
+PY
 ```
-目标：真实 agent loop 通过
+目标：以当前主 canary 完成真实 agent loop 与边界路径验证
 
 ---
 
