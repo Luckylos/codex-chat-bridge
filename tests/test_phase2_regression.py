@@ -17,6 +17,7 @@ from codex_chat_bridge.config import Settings
 from codex_chat_bridge.errors import InvalidRequestError, UnsupportedInputItemError
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.protocol.session import _assistant_message_from_chat_body
+from codex_chat_bridge.stream_responses_state import ResponsesStreamState
 from codex_chat_bridge.stream_state.envelope import ResponseEnvelopeState
 from codex_chat_bridge.stream_state.message import MessageState
 
@@ -179,7 +180,7 @@ def test_message_state_preserves_text_refusal_text_part_order_on_finalize() -> N
     completed_items = envelope.completed_output_items()
     assert completed_items == [
         {
-            "id": "resp_regression_msg",
+            "id": "msg_resp_regression",
             "type": "message",
             "status": "completed",
             "role": "assistant",
@@ -190,6 +191,20 @@ def test_message_state_preserves_text_refusal_text_part_order_on_finalize() -> N
             ],
         }
     ]
+
+
+def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> None:
+    state = ResponsesStreamState(response_id="resp_stream_regression")
+
+    state.push_text_delta("A")
+    state.push_refusal_part("No")
+    state.push_text_delta("B")
+    state.finalize()
+
+    assistant = state.build_assistant_message()
+    assert assistant is not None
+    assert assistant.role == "assistant"
+    assert assistant.content == "A\n[refusal]: No\nB"
 
 
 def test_response_envelope_preserves_bridge_response_id_when_metadata_has_upstream_id() -> None:

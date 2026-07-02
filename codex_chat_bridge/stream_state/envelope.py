@@ -25,7 +25,10 @@ class ResponseEnvelopeState:
 
     @property
     def message_item_id(self) -> str:
-        return f"{self.response_id}_msg"
+        # Some OpenAI-compatible validators (including NewAPI's Responses path)
+        # require message item ids to begin with "msg" when the item is later
+        # echoed back via previous_response_id continuation.
+        return f"msg_{self.response_id}"
 
     @property
     def reasoning_item_id(self) -> str:

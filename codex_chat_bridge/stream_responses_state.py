@@ -6,6 +6,7 @@ from .bridge_context import BridgeToolContext
 from .inline_think_sm import InlineThinkStateMachine
 from .models import ChatMessage
 from .protocol.sse import sse_event
+from .responses_to_chat.content_mapping import chat_message_content_from_response_content
 from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore
 
 
@@ -112,7 +113,7 @@ class ResponsesStreamState:
                 return None
 
         if content_parts:
-            content: str | list[dict[str, Any]] | None = content_parts
+            content = chat_message_content_from_response_content(content_parts)
         elif self.message.text:
             content = self.message.text
         else:
