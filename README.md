@@ -51,10 +51,11 @@ Responses client → /v1/responses → routes.py → response_service.py → res
 - **`stream_state/`** — 流式状态机（envelope/message/reasoning/tools）
 - **`inline_think_sm.py`** — InlineThink 三态状态机（detecting→reasoning→text），独立于 MessageState
 - **`errors.py`** — BridgeError 异常层级，统一错误传播
-- **`bridge_context/`** — 请求级工具上下文（schema 注册、namespace 映射）
+- **`bridge_context/`** — 请求级工具上下文（schema 注册、namespace 映射、nested namespace normalizer）
 - **`response_semantics.py`** — 共享响应语义 + REQUEST_ECHO_FIELDS 唯一定义
 - **`tool_arguments.py`** — canonicalize_tool_arguments（JSON 排序/归一化）
 - **`reasoning_policy.py`** — canonical effort 归一化 + provider bucket 分发
+- **`upstream_compat.py`** — 400 compat retry（含 explicit `tool_choice` / thinking-mode 冲突回退）
 
 详见 [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
@@ -86,8 +87,22 @@ bridge 将调用方的 reasoning 强度归一化为四档 canonical effort：
 - Hosted Responses tools 行为可配置：`ignore` / `reject` / `passthrough`
 - 不做多上游路由、provider 管理、本地 CLI
 
+## 当前生产 smoke canary
+
+当前 Phase B 的主验收 canary：
+
+- `deepseek-v4-flash-codex`
+
+说明：
+
+- `glm-5.1-codex` 已降级为历史参考，因为其主力上游已失效；当前不再作为主验收目标。
+- 兼容矩阵与 alias-surface 验证见：
+  - [`docs/compatibility-smoke-matrix.md`](docs/compatibility-smoke-matrix.md)
+  - [`docs/alias-surface-validation.md`](docs/alias-surface-validation.md)
+  - [`docs/production-smoke.md`](docs/production-smoke.md)
+
 ## 测试
 
 ```bash
-.venv/bin/python -m pytest tests/ -v    # 153 tests
+.venv/bin/python -m pytest tests/ -v    # 197 tests
 ```

@@ -10,7 +10,7 @@ Responses client ⟶ bridge ⟶ Chat Completions upstream (NewAPI)
 
 Bridge 只做协议转换；provider 聚合与模型路由由 NewAPI 负责。
 
-## 当前模块结构（2026-06 Phase 5 审计后）
+## 当前模块结构（2026-07 Phase A/B 收口后）
 
 ```
 codex_chat_bridge/
@@ -32,8 +32,9 @@ codex_chat_bridge/
 │
 ├── bridge_context/                 # 请求级工具上下文
 │   ├── constants.py                # TOOL_SEARCH_PROXY_NAME, NAMESPACE_SEP
-│   ├── models.py                   # ToolSpec 轻量数据
+│   ├── models.py                   # ToolSpec 轻量数据 + nested namespace 元信息
 │   ├── naming.py                   # namespace flatten / hash / restore
+│   ├── nested_namespace.py         # shared nested namespace action normalize + nested_anyof params flatten
 │   ├── custom_tools.py             # custom tool 参数编解码 + tool_search 对象化
 │   ├── context.py                  # BridgeToolContext 聚合 + tool schema 注册
 │   └── builder.py                  # request input 遍历 + context 构建 (tool_search_output 提前 return)
@@ -71,7 +72,7 @@ codex_chat_bridge/
 │
 ├── upstream.py                     # UpstreamClient facade + request lifecycle
 ├── upstream_transport.py           # 纯 HTTP 传输 (retry/backoff/send/cleanup)
-├── upstream_compat.py              # 400 compat retry + provider_default fallback (import _error_mentions)
+├── upstream_compat.py              # 400 compat retry + provider_default fallback + explicit tool_choice/thinking-mode compat
 │
 └── api/                            # HTTP 边界
     ├── lifespan.py                 # FastAPI 生命周期 + BridgeError exception_handler
@@ -141,7 +142,7 @@ bridge_error_response() → JSONResponse (正确 status_code + error body)
 - 21 P2: 4 处代码去重, 3 处死代码, response_format 双写消除, o-series regex, builder quadratic fix, 等
 - 4 P3: 死常量, sentinel type, events 声明位置
 
-**累计 67 项审计问题修复，153 测试全绿。**
+**截至 2026-07-02：Phase A/B 收口完成，当前全量测试 197 passed, 1 warning。**
 
 ## Policy Matrix（当前冻结）
 
@@ -161,7 +162,7 @@ bridge_error_response() → JSONResponse (正确 status_code + error body)
 | input_image → image_url | ✅ | ✅ 上游需支持 image | 含 SSRF 校验 |
 | input_audio | ✅ | ✅ 上游需支持 audio part | 支持 URL / data 映射到 Chat `input_audio` |
 | Function Call | ✅ | ✅ 上游需支持 tool_calls | function/custom/tool_search；item_id 稳定 |
-| Namespace Tool | ✅ | — | flatten→restore roundtrip |
+| Namespace Tool | ✅ | — | flatten→restore roundtrip；nested_oneof / nested_anyof；explicit namespace `tool_choice` compat 已验证 |
 | Reasoning | ✅ | ✅ 上游需返回 reasoning_content | 流式/非流式/typed tool-call 均保留 |
 | refusals | ✅ | — | 非流式 + content array + session 独立存储 |
 | previous_response_id | ✅ | — | 内存存储, TTL 1h + access 续期, deepcopy 隔离 |

@@ -3,7 +3,7 @@
 > **状态**: 🏛️ Historical reference — 此文档记录 Phase 2 之前的基准状态，用于重构规划参考。  
 > **生成时间**: 2026-06-29  
 > **基准版本**: pre-phase2 working tree  
-> **当前版本**: Phase 5 审计后，153 测试全绿，67 项问题已修复  
+> **当前版本**: 2026-07-02 Phase A/B 收口后，当前主验收 canary 为 `deepseek-v4-flash-codex`；全量测试 197 passed, 1 warning  
 >  
 > ⚠️ 文件结构、行数、测试数均已被重构大幅改变，请以 `ARCHITECTURE.md` 为准。
 

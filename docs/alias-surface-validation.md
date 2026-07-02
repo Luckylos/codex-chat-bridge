@@ -118,12 +118,12 @@ _更新时间：2026-07-02_
 ## 5. 当前结论（2026-07-02）
 
 - `deepseek-v4-flash-codex`：**PASS**
-- `glm-5.1-codex`：**BLOCKED（alias/channel availability）**
+- `glm-5.1-codex`：**历史参考（非当前验收目标）**
 
 这一区分非常重要，因为它决定后续动作完全不同：
 
 - PASS / FAIL -> 继续修 bridge
-- BLOCKED -> 应先查 alias export / channel / distributor
+- 历史参考 -> 默认不继续投入当前阶段排查，除非用户重新要求恢复
 
 ---
 

@@ -1,6 +1,6 @@
 # Reasoning Policy Freeze
 
-_Last updated: 2026-06-29_
+_Last updated: 2026-07-02_
 
 ## 目标
 
@@ -264,6 +264,33 @@ MODEL_REASONING_BUCKET_RULES = [
 - `stream_options`
 - `include_usage`
 - `parallel_tool_calls`
+
+### 非 reasoning 的兼容规则补充：explicit `tool_choice` vs thinking mode
+
+已验证真实案例：
+
+- 模型：`deepseek-v4-flash`
+- 条件：显式 `tool_choice` object + provider-default thinking mode
+- 上游报错：`The tool_choice parameter does not support being set to required or object in thinking mode`
+
+冻结结论：
+
+- 这不是 nested namespace parser 的职责
+- 也不应通过全局关闭 reasoning 来规避
+- 正确位置是 **upstream compat retry 层**
+
+当前策略：
+
+- 当调用方 **未显式指定 reasoning**
+- 且显式 `tool_choice` object 因 thinking mode 被上游拒绝
+- bridge 可重试一次：
+  - `reasoning_effort=none`
+  - 移除 `thinking`
+
+约束：
+
+- 若调用方已经显式指定 reasoning，则不静默覆盖其意图
+- 该规则属于 **边界兼容补充**，不是新的 provider bucket
 
 并继续要求：
 
