@@ -832,6 +832,99 @@ def test_tool_state_custom_input_delta_preserves_chunk_granularity() -> None:
     ]
 
 
+def test_tool_state_custom_input_delta_waits_for_split_unicode_escape_completion() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    store = ToolStateStore(context)
+    envelope = ResponseEnvelopeState(response_id="resp_custom_unicode_chunks")
+
+    chunks: list[bytes] = []
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_exec",
+                "function": {"name": "exec"},
+            },
+            reasoning="Need unicode.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"input":"\\u4f'},
+            },
+            reasoning="Need unicode.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '60"}'},
+            },
+            reasoning="Need unicode.",
+        )
+    )
+    chunks.extend(store.finalize(envelope))
+    output = b"".join(chunks).decode()
+
+    assert output.count("event: response.custom_tool_call_input.delta") == 1
+    assert '"delta": "你"' in output
+    assert '"input": "你"' in output
+    assert envelope.completed_output_items()[0]["input"] == "你"
+
+
+def test_tool_state_custom_input_delta_decodes_split_escaped_quote_without_raw_backslash_leak() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    store = ToolStateStore(context)
+    envelope = ResponseEnvelopeState(response_id="resp_custom_quote_chunks")
+
+    chunks: list[bytes] = []
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_exec",
+                "function": {"name": "exec"},
+            },
+            reasoning="Need quote.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"input":"a\\'},
+            },
+            reasoning="Need quote.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '"b"}'},
+            },
+            reasoning="Need quote.",
+        )
+    )
+    chunks.extend(store.finalize(envelope))
+    output = b"".join(chunks).decode()
+
+    assert '\\\\"b' not in output
+    assert '"input": "a\\"b"' in output
+    assert envelope.completed_output_items()[0]["input"] == 'a"b'
+
+
 def test_stream_fail_preserves_parallel_mixed_tool_output_order() -> None:
     context = BridgeToolContext()
     context.add_custom_tool({"type": "custom", "name": "exec"})
@@ -876,6 +969,57 @@ def test_stream_truncated_preserves_parallel_mixed_tool_output_order() -> None:
     assert response["status"] == "incomplete"
     assert response["incomplete_details"] == {"reason": "stream_truncated"}
     assert [item["call_id"] for item in response["output"]] == ["call_exec", "call_fn", "call_search"]
+
+
+def test_stream_fail_preserves_reasoning_message_and_parallel_tools_in_canonical_output_order() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    context.add_tool_search_tool()
+    state = ResponsesStreamState(context, response_id="resp_mixed_lifecycle_fail")
+
+    state.push_reasoning_delta("Need tools.")
+    state.push_text_delta("hello")
+    state.push_tool_call_delta({"index": 2, "id": "call_search", "function": {"name": "tool_search"}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "id": "call_exec", "function": {"name": "exec"}}, "Need tools.")
+    state.push_tool_call_delta(
+        {"index": 1, "id": "call_fn", "function": {"name": "read_file", "arguments": '{"path":"/tmp/x"}'}},
+        "Need tools.",
+    )
+    state.push_tool_call_delta({"index": 2, "function": {"arguments": '{"query":"gmail"}'}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "function": {"arguments": '{"input":"pwd"}'}}, "Need tools.")
+
+    output = b"".join(state.fail("bad request", "invalid_request_error")).decode()
+    response = _response_payload_for_event(output, "response.failed")
+
+    assert [item["type"] for item in response["output"]] == ["reasoning", "message", "custom_tool_call", "function_call", "tool_search_call"]
+    assert [item.get("call_id") for item in response["output"][2:]] == ["call_exec", "call_fn", "call_search"]
+    assert output.index("event: response.output_item.done") < output.index("event: response.failed")
+
+
+def test_stream_truncated_preserves_reasoning_message_and_parallel_tools_in_canonical_output_order() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    context.add_tool_search_tool()
+    state = ResponsesStreamState(context, response_id="resp_mixed_lifecycle_truncated")
+
+    state.push_reasoning_delta("Need tools.")
+    state.push_text_delta("hello")
+    state.push_tool_call_delta({"index": 2, "id": "call_search", "function": {"name": "tool_search"}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "id": "call_exec", "function": {"name": "exec"}}, "Need tools.")
+    state.push_tool_call_delta(
+        {"index": 1, "id": "call_fn", "function": {"name": "read_file", "arguments": '{"path":"/tmp/x"}'}},
+        "Need tools.",
+    )
+    state.push_tool_call_delta({"index": 2, "function": {"arguments": '{"query":"gmail"}'}}, "Need tools.")
+    state.push_tool_call_delta({"index": 0, "function": {"arguments": '{"input":"pwd"}'}}, "Need tools.")
+
+    output = b"".join(state.finalize()).decode()
+    response = _response_payload_for_event(output, "response.completed")
+
+    assert response["status"] == "incomplete"
+    assert response["incomplete_details"] == {"reason": "stream_truncated"}
+    assert [item["type"] for item in response["output"]] == ["reasoning", "message", "custom_tool_call", "function_call", "tool_search_call"]
+    assert [item.get("call_id") for item in response["output"][2:]] == ["call_exec", "call_fn", "call_search"]
 
 
 def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:
