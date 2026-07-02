@@ -13,6 +13,38 @@ from .stream_responses_state import ResponsesStreamState
 _LOGGER = logging.getLogger("codex-chat-bridge")
 
 
+def _new_stream_state(
+    tool_context: BridgeToolContext | None,
+    response_id: str | None,
+    original_request: dict | None,
+) -> ResponsesStreamState:
+    state = ResponsesStreamState(tool_context, response_id=response_id)
+    state.envelope.set_request_echo(original_request)
+    return state
+
+
+def _capture_stream_state(state: ResponsesStreamState, captured_state: list | None) -> None:
+    if captured_state is not None:
+        captured_state.append(state)
+
+
+async def _iter_sse_messages(upstream_stream: AsyncIterator[bytes]) -> AsyncIterator[tuple[str | None, str]]:
+    buffer = ""
+    async for chunk in upstream_stream:
+        buffer += chunk.decode("utf-8", errors="ignore")
+        while True:
+            extracted = extract_block(buffer)
+            if extracted is None:
+                break
+            block, buffer = extracted
+            if not block.strip():
+                continue
+            event_name, data = parse_sse_block(block)
+            if not data:
+                continue
+            yield event_name, data
+
+
 def _extract_reasoning_delta(delta: dict) -> str:
     for key in ("reasoning_content", "reasoning"):
         value = delta.get(key)
@@ -106,6 +138,17 @@ def _finish_reason_events(state: ResponsesStreamState, finish_reason: str | None
     return []
 
 
+def _process_sse_message(
+    event_name: str | None,
+    data: str,
+    state: ResponsesStreamState,
+) -> list[bytes]:
+    if data.strip() == "[DONE]":
+        return state.finalize()
+    payload = json.loads(data)
+    return _process_chat_chunk(payload, event_name, state)
+
+
 async def create_responses_sse_stream_from_chat_stream(
     upstream_stream: AsyncIterator[bytes],
     tool_context: BridgeToolContext | None = None,
@@ -118,29 +161,11 @@ async def create_responses_sse_stream_from_chat_stream(
     If _captured_state is provided (e.g. []), the state is appended
     after iteration so caller can extract assistant_message for session.
     """
-    buffer = ""
-    state = ResponsesStreamState(tool_context, response_id=response_id)
-    state.envelope.set_request_echo(original_request)
+    state = _new_stream_state(tool_context, response_id, original_request)
     try:
-        async for chunk in upstream_stream:
-            buffer += chunk.decode("utf-8", errors="ignore")
-            while True:
-                extracted = extract_block(buffer)
-                if extracted is None:
-                    break
-                block, buffer = extracted
-                if not block.strip():
-                    continue
-                event_name, data = parse_sse_block(block)
-                if not data:
-                    continue
-                if data.strip() == "[DONE]":
-                    for event in state.finalize():
-                        yield event
-                    continue
-                payload = json.loads(data)
-                for event in _process_chat_chunk(payload, event_name, state):
-                    yield event
+        async for event_name, data in _iter_sse_messages(upstream_stream):
+            for event in _process_sse_message(event_name, data, state):
+                yield event
 
         for event in state.finalize():
             yield event
@@ -148,8 +173,7 @@ async def create_responses_sse_stream_from_chat_stream(
         for event in state.fail(f"Stream error: {exc}"):
             yield event
     finally:
-        if _captured_state is not None:
-            _captured_state.append(state)
+        _capture_stream_state(state, _captured_state)
 
 
 def _process_chat_chunk(
@@ -220,8 +244,7 @@ async def create_responses_sse_from_chat_response(
     original_request: dict | None = None,
 ) -> AsyncIterator[bytes]:
     """Wrap a non-streaming Chat Completions response into Responses SSE events."""
-    state = ResponsesStreamState(tool_context, response_id=response_id)
-    state.envelope.set_request_echo(original_request)
+    state = _new_stream_state(tool_context, response_id, original_request)
     state.apply_chunk_metadata(chat_body)
 
     choices = chat_body.get("choices") or []

@@ -43,6 +43,32 @@ class StreamingFailureSemanticsTests(unittest.TestCase):
         self.assertIn('"type":"invalid_request_error"', compact)
         self.assertLess(compact.index("event:response.output_item.done"), compact.index("event:response.failed"))
 
+    def test_stream_parser_handles_sse_frame_split_across_chunks(self) -> None:
+        payload = json.dumps(
+            {
+                "id": "chatcmpl_split",
+                "model": "demo-model",
+                "choices": [{"delta": {"content": "Hello"}, "finish_reason": "stop"}],
+            },
+            ensure_ascii=False,
+        )
+
+        async def upstream_stream():
+            yield f"data: {payload[:40]}".encode()
+            yield f"{payload[40:]}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_stream_from_chat_stream(upstream_stream()):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        output = asyncio.run(collect())
+        compact = output.replace(" ", "")
+        self.assertIn('"text":"Hello"', compact)
+        self.assertIn("event:response.completed", compact)
+
 
 if __name__ == "__main__":
     unittest.main()
