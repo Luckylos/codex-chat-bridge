@@ -273,6 +273,21 @@ def test_response_envelope_preserves_bridge_response_id_when_metadata_has_upstre
     assert envelope.created_at == 1710000000
 
 
+def test_response_envelope_completed_event_applies_finish_reason_mapping_and_request_echo() -> None:
+    envelope = ResponseEnvelopeState(response_id="resp_bridge_echo")
+    envelope.set_request_echo({"instructions": "be terse", "metadata": {"trace": "abc"}})
+    envelope.finish_reason = "content_filter"
+    envelope.apply_metadata({"model": "test-model", "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3}})
+
+    output = envelope.completed_event([{"id": "item_1", "type": "message"}]).decode()
+
+    assert 'event: response.completed' in output
+    assert '"status": "incomplete"' in output
+    assert '"incomplete_details": {"reason": "content_filter"}' in output
+    assert '"instructions": "be terse"' in output
+    assert '"metadata": {"trace": "abc"}' in output
+
+
 def test_stream_upstream_streaming_does_not_persist_failed_streams() -> None:
     class DummyClient:
         def stream_chat_completion(self, payload):

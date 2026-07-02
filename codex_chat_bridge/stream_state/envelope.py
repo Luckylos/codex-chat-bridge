@@ -3,7 +3,12 @@ from __future__ import annotations
 import time
 
 from ..protocol.sse import sse_event
-from ..response_semantics import map_chat_usage, REQUEST_ECHO_FIELDS
+from ..response_semantics import (
+    REQUEST_ECHO_FIELDS,
+    incomplete_reason_from_finish_reason,
+    map_chat_usage,
+    response_status_from_finish_reason,
+)
 
 
 class ResponseEnvelopeState:
@@ -66,14 +71,17 @@ class ResponseEnvelopeState:
         self._apply_request_echo(response)
         return response
 
+    def _response_event(self, event_name: str, response: dict) -> bytes:
+        return sse_event(event_name, {"type": event_name, "response": response})
+
     def ensure_started(self) -> list[bytes]:
         if self.response_started:
             return []
         self.response_started = True
         response = self.base_response("in_progress", [])
         return [
-            sse_event("response.created", {"type": "response.created", "response": response}),
-            sse_event("response.in_progress", {"type": "response.in_progress", "response": response}),
+            self._response_event("response.created", response),
+            self._response_event("response.in_progress", response),
         ]
 
     def append_completed_item(self, output_index: int, item: dict) -> None:
@@ -89,3 +97,20 @@ class ResponseEnvelopeState:
             self.created_at = payload["created"]
         if payload.get("usage"):
             self.usage = map_chat_usage(payload["usage"])
+
+    def completed_event(self, output: list[dict]) -> bytes:
+        response = self.base_response(response_status_from_finish_reason(self.finish_reason), output)
+        incomplete_details = incomplete_reason_from_finish_reason(self.finish_reason)
+        if incomplete_details is not None:
+            response["incomplete_details"] = incomplete_details
+        return self._response_event("response.completed", response)
+
+    def truncated_event(self, output: list[dict]) -> bytes:
+        response = self.base_response("incomplete", output)
+        response["incomplete_details"] = {"reason": "stream_truncated"}
+        return self._response_event("response.completed", response)
+
+    def failed_event(self, message: str, error_type: str) -> bytes:
+        response = self.base_response("failed", self.completed_output_items())
+        response["error"] = {"message": message, "type": error_type}
+        return self._response_event("response.failed", response)

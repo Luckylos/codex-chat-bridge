@@ -5,7 +5,6 @@ from typing import Any
 from .bridge_context import BridgeToolContext
 from .inline_think_sm import InlineThinkStateMachine
 from .models import ChatMessage
-from .protocol.sse import sse_event
 from .responses_to_chat.content_mapping import chat_message_content_from_response_content
 from .stream_state import MessageState, ReasoningState, ResponseEnvelopeState, ToolStateStore
 
@@ -64,33 +63,6 @@ class ResponsesStreamState:
         events.extend(self.tools.finalize(self.envelope))
         return events
 
-    def _completion_status(self) -> str:
-        finish_reason = self.envelope.finish_reason
-        if finish_reason in ("length", "content_filter"):
-            return "incomplete"
-        if finish_reason == "tool_calls":
-            return "in_progress"
-        return "completed"
-
-    def _incomplete_reason(self) -> str | None:
-        if self.envelope.finish_reason == "content_filter":
-            return "content_filter"
-        if self.envelope.finish_reason == "length":
-            return "max_output_tokens"
-        return None
-
-    def _response_completed_event(self, status: str, output: list[dict]) -> bytes:
-        response = self.envelope.base_response(status, output)
-        incomplete_reason = self._incomplete_reason()
-        if incomplete_reason is not None:
-            response["incomplete_details"] = {"reason": incomplete_reason}
-        return sse_event("response.completed", {"type": "response.completed", "response": response})
-
-    def _response_failed_event(self, message: str, error_type: str) -> bytes:
-        response = self.envelope.base_response("failed", self.envelope.completed_output_items())
-        response["error"] = {"message": message, "type": error_type}
-        return sse_event("response.failed", {"type": "response.failed", "response": response})
-
     def finalize(self) -> list[bytes]:
         if self.envelope.completed:
             return []
@@ -100,20 +72,18 @@ class ResponsesStreamState:
 
         if self.envelope.finish_reason is None:
             if output:
-                response = self.envelope.base_response("incomplete", output)
-                response["incomplete_details"] = {"reason": "stream_truncated"}
-                events.append(sse_event("response.completed", {"type": "response.completed", "response": response}))
+                events.append(self.envelope.truncated_event(output))
             else:
                 events.extend(self.fail("Stream truncated before any output was produced", "stream_truncated"))
             return events
 
-        events.append(self._response_completed_event(self._completion_status(), output))
+        events.append(self.envelope.completed_event(output))
         return events
 
     def fail(self, message: str, error_type: str = "stream_error") -> list[bytes]:
         self.envelope.completed = True
         events = self._flush_open_items()
-        events.append(self._response_failed_event(message, error_type))
+        events.append(self.envelope.failed_event(message, error_type))
         return events
 
     def _assistant_message_content(self) -> Any:
