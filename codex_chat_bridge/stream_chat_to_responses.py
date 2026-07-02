@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import AsyncIterator
-import json
+from typing import Any
 
 from .bridge_context import BridgeToolContext
 from .protocol.sse import extract_block, parse_sse_block
 from .stream_responses_state import ResponsesStreamState
+
+
+_LOGGER = logging.getLogger("codex-chat-bridge")
 
 
 def _extract_reasoning_delta(delta: dict) -> str:
@@ -15,6 +19,91 @@ def _extract_reasoning_delta(delta: dict) -> str:
         if isinstance(value, str) and value:
             return value
     return ""
+
+
+def _parse_choice(payload: dict) -> tuple[dict, dict]:
+    choice = (payload.get("choices") or [{}])[0]
+    delta = choice.get("delta") or {}
+    return choice, delta
+
+
+def _flush_reasoning_and_inline_think(state: ResponsesStreamState) -> list[bytes]:
+    events: list[bytes] = []
+    events.extend(state.finalize_reasoning_if_open())
+    events.extend(state.inline_think.force_to_text(state))
+    return events
+
+
+def _error_events(
+    payload: dict,
+    event_name: str | None,
+    state: ResponsesStreamState,
+) -> list[bytes] | None:
+    if event_name != "error" and not payload.get("error"):
+        return None
+    err = payload.get("error") or payload
+    message = err.get("message") if isinstance(err, dict) else str(err)
+    error_type = err.get("type", "stream_error") if isinstance(err, dict) else "stream_error"
+    return state.fail(message or "upstream stream error", error_type)
+
+
+def _tool_call_events(
+    state: ResponsesStreamState,
+    tool_calls: list,
+) -> list[bytes]:
+    events: list[bytes] = []
+    reasoning_text = state.active_reasoning_text_for_tools()
+    if reasoning_text:
+        events.extend(state.finalize_reasoning_if_open())
+    events.extend(state.inline_think.force_to_text(state))
+    for tool_call in tool_calls:
+        if isinstance(tool_call, dict):
+            events.extend(state.push_tool_call_delta(tool_call, reasoning_text or None))
+    return events
+
+
+def _string_content_events(
+    state: ResponsesStreamState,
+    content: str,
+    *,
+    reasoning_delta: str,
+) -> list[bytes]:
+    if not content:
+        return []
+    if reasoning_delta:
+        return [*state.finalize_reasoning_if_open(), *state.push_text_delta(content)]
+    return state.push_content_delta(content)
+
+
+def _structured_content_events(
+    state: ResponsesStreamState,
+    content: list,
+) -> list[bytes]:
+    events = _flush_reasoning_and_inline_think(state)
+    for part in content:
+        if not isinstance(part, dict):
+            continue
+        part_type = part.get("type")
+        if part_type in {"text", "output_text"} and isinstance(part.get("text"), str) and part.get("text"):
+            state.message.add_annotations(part.get("annotations"))
+            events.extend(state.push_text_delta(part["text"]))
+        elif part_type == "refusal" and isinstance(part.get("refusal"), str) and part.get("refusal"):
+            events.extend(state.push_refusal_part(part["refusal"]))
+        else:
+            _LOGGER.debug("Skipping unhandled structured content part type: %s", part_type)
+    return events
+
+
+def _refusal_events(state: ResponsesStreamState, refusal: Any) -> list[bytes]:
+    if not isinstance(refusal, str) or not refusal:
+        return []
+    return [*state.finalize_reasoning_if_open(), *state.push_refusal_part(refusal)]
+
+
+def _finish_reason_events(state: ResponsesStreamState, finish_reason: str | None) -> list[bytes]:
+    if isinstance(finish_reason, str) and finish_reason:
+        state.set_finish_reason(finish_reason)
+    return []
 
 
 async def create_responses_sse_stream_from_chat_stream(
@@ -68,19 +157,13 @@ def _process_chat_chunk(
 ) -> list[bytes]:
     """Process a single Chat Completions chunk through the state machine.
     Returns list of SSE event bytes. Used by both streaming and non-streaming paths."""
-    events: list[bytes] = []
-
-    if event_name == "error" or payload.get("error"):
-        err = payload.get("error") or payload
-        message = err.get("message") if isinstance(err, dict) else str(err)
-        error_type = err.get("type", "stream_error") if isinstance(err, dict) else "stream_error"
-        return state.fail(message or "upstream stream error", error_type)
+    error_events = _error_events(payload, event_name, state)
+    if error_events is not None:
+        return error_events
 
     state.apply_chunk_metadata(payload)
-    events.extend(state.ensure_started())
-
-    choice = (payload.get("choices") or [{}])[0]
-    delta = choice.get("delta") or {}
+    events = state.ensure_started()
+    choice, delta = _parse_choice(payload)
 
     reasoning_delta = _extract_reasoning_delta(delta)
     if reasoning_delta:
@@ -88,55 +171,23 @@ def _process_chat_chunk(
 
     tool_calls = delta.get("tool_calls")
     if isinstance(tool_calls, list) and tool_calls:
-        reasoning_text = state.active_reasoning_text_for_tools()
-        if reasoning_text:
-            events.extend(state.finalize_reasoning_if_open())
-        # If inline think is still in detecting/reasoning phase, flush it
-        events.extend(state.inline_think.force_to_text(state))
-        for tool_call in tool_calls:
-            if isinstance(tool_call, dict):
-                events.extend(state.push_tool_call_delta(tool_call, reasoning_text or None))
+        events.extend(_tool_call_events(state, tool_calls))
 
     state.message.add_annotations(delta.get("annotations"))
 
     content = delta.get("content")
-    if isinstance(content, str) and content:
-        # If explicit reasoning field was already used, finalize it and
-        # skip inline think detection — content is ordinary text
-        if reasoning_delta:
-            events.extend(state.finalize_reasoning_if_open())
-            events.extend(state.push_text_delta(content))
-        else:
-            events.extend(state.push_content_delta(content))
+    if isinstance(content, str):
+        events.extend(_string_content_events(state, content, reasoning_delta=reasoning_delta))
     elif isinstance(content, list):
-        events.extend(state.finalize_reasoning_if_open())
-        # Flush any pending inline think buffer as text
-        events.extend(state.inline_think.force_to_text(state))
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            part_type = part.get("type")
-            if part_type in {"text", "output_text"} and isinstance(part.get("text"), str) and part.get("text"):
-                # Forward annotations from structured content parts
-                state.message.add_annotations(part.get("annotations"))
-                events.extend(state.push_text_delta(part["text"]))
-            elif part_type == "refusal" and isinstance(part.get("refusal"), str) and part.get("refusal"):
-                events.extend(state.push_refusal_part(part["refusal"]))
-            else:
-                logging.getLogger("codex-chat-bridge").debug(
-                    "Skipping unhandled structured content part type: %s", part_type
-                )
+        events.extend(_structured_content_events(state, content))
 
-    refusal = delta.get("refusal")
-    if isinstance(refusal, str) and refusal:
-        events.extend(state.finalize_reasoning_if_open())
-        events.extend(state.push_refusal_part(refusal))
-
-    finish_reason = choice.get("finish_reason")
-    if isinstance(finish_reason, str) and finish_reason:
-        state.set_finish_reason(finish_reason)
-
+    events.extend(_refusal_events(state, delta.get("refusal")))
+    events.extend(_finish_reason_events(state, choice.get("finish_reason")))
     return events
+
+
+def _indexed_tool_calls(tool_calls: list) -> list[dict]:
+    return [{**tc, "index": i} for i, tc in enumerate(tool_calls) if isinstance(tc, dict)]
 
 
 def _chat_message_to_fake_delta(chat_choice: dict) -> dict:
@@ -158,9 +209,7 @@ def _chat_message_to_fake_delta(chat_choice: dict) -> dict:
     }
     tool_calls = message.get("tool_calls")
     if isinstance(tool_calls, list):
-        delta["tool_calls"] = [
-            {**tc, "index": i} for i, tc in enumerate(tool_calls)
-        ]
+        delta["tool_calls"] = _indexed_tool_calls(tool_calls)
     return delta
 
 

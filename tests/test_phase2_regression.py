@@ -17,6 +17,7 @@ from codex_chat_bridge.config import Settings
 from codex_chat_bridge.errors import InvalidRequestError, UnsupportedInputItemError
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.protocol.session import _assistant_message_from_chat_body
+from codex_chat_bridge.stream_chat_to_responses import _chat_message_to_fake_delta
 from codex_chat_bridge.stream_responses_state import ResponsesStreamState
 from codex_chat_bridge.stream_state.envelope import ResponseEnvelopeState
 from codex_chat_bridge.stream_state.message import MessageState
@@ -286,6 +287,23 @@ def test_response_envelope_completed_event_applies_finish_reason_mapping_and_req
     assert '"incomplete_details": {"reason": "content_filter"}' in output
     assert '"instructions": "be terse"' in output
     assert '"metadata": {"trace": "abc"}' in output
+
+
+def test_chat_message_to_fake_delta_injects_indexes_for_parallel_tool_calls() -> None:
+    delta = _chat_message_to_fake_delta(
+        {
+            "message": {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_a", "type": "function", "function": {"name": "alpha", "arguments": "{}"}},
+                    {"id": "call_b", "type": "function", "function": {"name": "beta", "arguments": "{}"}},
+                ],
+            }
+        }
+    )
+
+    assert delta["tool_calls"][0]["index"] == 0
+    assert delta["tool_calls"][1]["index"] == 1
 
 
 def test_stream_upstream_streaming_does_not_persist_failed_streams() -> None:
