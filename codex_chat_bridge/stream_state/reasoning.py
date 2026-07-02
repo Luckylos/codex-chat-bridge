@@ -20,28 +20,19 @@ class ReasoningState:
         self.done = False
         self.output_index: int = 0
 
-    def _reasoning_item_in_progress(self, envelope: ResponseEnvelopeState) -> dict:
-        return {
-            "id": envelope.reasoning_item_id,
-            "type": "reasoning",
-            "status": "in_progress",
-            "summary": [],
-        }
-
-    def _reasoning_item_completed(self, envelope: ResponseEnvelopeState) -> dict:
-        return {
-            "id": envelope.reasoning_item_id,
-            "type": "reasoning",
-            "summary": [{"type": "summary_text", "text": self.text}],
-        }
-
     def _ensure_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if self.item_added:
             return []
         self.item_added = True
         self.output_index = envelope.allocate_output_index()
+        item = {
+            "id": envelope.reasoning_item_id,
+            "type": "reasoning",
+            "status": "in_progress",
+            "summary": [],
+        }
         return [
-            output_item_added(self.output_index, self._reasoning_item_in_progress(envelope)),
+            output_item_added(self.output_index, item),
             reasoning_summary_part_added(
                 envelope.reasoning_item_id,
                 self.output_index,
@@ -69,7 +60,11 @@ class ReasoningState:
         if not self.item_added or self.done:
             return []
         self.done = True
-        item = self._reasoning_item_completed(envelope)
+        item = {
+            "id": envelope.reasoning_item_id,
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": self.text}],
+        }
         summary_part = {"type": "summary_text", "text": self.text}
         envelope.append_completed_item(self.output_index, item)
         return [

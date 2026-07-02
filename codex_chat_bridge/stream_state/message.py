@@ -62,30 +62,19 @@ class MessageState:
         self._annotations.clear()
         return annotations
 
-    def _message_item_in_progress(self, envelope: ResponseEnvelopeState) -> dict:
-        return {
+    def _ensure_message_item_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
+        if self.item_added:
+            return []
+        self.item_added = True
+        self.output_index = envelope.allocate_output_index()
+        item = {
             "id": envelope.message_item_id,
             "type": "message",
             "status": "in_progress",
             "role": "assistant",
             "content": [],
         }
-
-    def _message_item_completed(self, envelope: ResponseEnvelopeState) -> dict:
-        return {
-            "id": envelope.message_item_id,
-            "type": "message",
-            "status": "completed",
-            "role": "assistant",
-            "content": list(self.parts),
-        }
-
-    def _ensure_message_item_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
-        if self.item_added:
-            return []
-        self.item_added = True
-        self.output_index = envelope.allocate_output_index()
-        return [output_item_added(self.output_index, self._message_item_in_progress(envelope))]
+        return [output_item_added(self.output_index, item)]
 
     def _start_text_segment(self, envelope: ResponseEnvelopeState) -> tuple[dict[str, Any], list[bytes]]:
         events = self._ensure_message_item_started(envelope)
@@ -204,7 +193,13 @@ class MessageState:
                 continue
             events.extend(self._finalize_text_segment(envelope, segment))
 
-        item = self._message_item_completed(envelope)
+        item = {
+            "id": envelope.message_item_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": list(self.parts),
+        }
         envelope.append_completed_item(self.output_index or 0, item)
         events.append(output_item_done(self.output_index, item))
         return events

@@ -196,6 +196,31 @@ def test_message_state_preserves_text_refusal_text_part_order_on_finalize() -> N
     ]
 
 
+def test_message_state_preserves_pending_annotations_in_completed_item() -> None:
+    envelope = ResponseEnvelopeState(response_id="resp_annotations")
+    message_state = MessageState()
+
+    message_state.add_annotations([{"type": "url_citation", "url": "https://example.com"}])
+    message_state.push_text_delta(envelope, "Hello")
+    message_state.finalize(envelope)
+
+    assert envelope.completed_output_items() == [
+        {
+            "id": "msg_resp_annotations",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Hello",
+                    "annotations": [{"type": "url_citation", "url": "https://example.com"}],
+                }
+            ],
+        }
+    ]
+
+
 def test_reasoning_state_tracks_active_text_and_finalizes_summary() -> None:
     envelope = ResponseEnvelopeState(response_id="resp_reasoning_regression")
     reasoning_state = ReasoningState()
@@ -209,6 +234,22 @@ def test_reasoning_state_tracks_active_text_and_finalizes_summary() -> None:
     assert reasoning_state.active_text_for_tools() == ""
     assert "event: response.reasoning_summary_text.done" in events
     assert '"text": " Need context. "' in events
+
+
+def test_reasoning_state_appends_completed_item_to_envelope() -> None:
+    envelope = ResponseEnvelopeState(response_id="resp_reasoning_item")
+    reasoning_state = ReasoningState()
+
+    reasoning_state.push_delta(envelope, "Need context.")
+    reasoning_state.finalize(envelope)
+
+    assert envelope.completed_output_items() == [
+        {
+            "id": "rs_resp_reasoning_item",
+            "type": "reasoning",
+            "summary": [{"type": "summary_text", "text": "Need context."}],
+        }
+    ]
 
 
 def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> None:
