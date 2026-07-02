@@ -107,5 +107,62 @@ class OrphanToolOutputTests(unittest.TestCase):
         self.assertEqual(tool_msgs[0].tool_call_id, "call_match")
 
 
+class RequestBuilderBoundaryTests(unittest.TestCase):
+    def test_text_format_overrides_response_format(self):
+        payload = ResponsesRequest.model_validate({
+            "model": "test-model",
+            "text": {"format": {"type": "json_schema", "json_schema": {"name": "demo", "schema": {"type": "object"}}}},
+            "response_format": {"type": "json_object"},
+        })
+        req = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(req.response_format["type"], "json_schema")
+
+    def test_o_series_uses_max_completion_tokens_instead_of_max_tokens(self):
+        payload = ResponsesRequest.model_validate({
+            "model": "o3-mini",
+            "max_output_tokens": 321,
+        })
+        req = responses_to_chat_request(payload, "fallback-model")
+        self.assertIsNone(req.max_tokens)
+        self.assertEqual(req.max_completion_tokens, 321)
+
+    def test_namespace_tool_choice_is_translated_through_tool_context(self):
+        payload = ResponsesRequest.model_validate({
+            "model": "test-model",
+            "tool_choice": {"type": "function", "name": "shell", "namespace": "codex"},
+            "tools": [
+                {
+                    "type": "namespace",
+                    "name": "codex",
+                    "tools": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "shell",
+                                "description": "Execute shell",
+                                "parameters": {"type": "object", "properties": {"command": {"type": "string"}}},
+                            },
+                        }
+                    ],
+                }
+            ],
+        })
+        req = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(req.tool_choice["type"], "function")
+        self.assertEqual(req.tool_choice["function"]["name"], "codex__shell")
+
+    def test_reasoning_effort_and_passthrough_fields_are_applied(self):
+        payload = ResponsesRequest.model_validate({
+            "model": "test-model",
+            "reasoning": {"effort": "medium"},
+            "parallel_tool_calls": True,
+            "metadata": {"trace": "abc"},
+        })
+        req = responses_to_chat_request(payload, "fallback-model")
+        self.assertEqual(req.reasoning_effort, "high")
+        self.assertTrue(req.parallel_tool_calls)
+        self.assertEqual(req.metadata, {"trace": "abc"})
+
+
 if __name__ == "__main__":
     unittest.main()

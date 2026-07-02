@@ -48,48 +48,98 @@ def _response_format_from_payload(payload: ResponsesRequest) -> Any:
     return payload.response_format
 
 
+def _initial_messages(existing_messages: list[ChatMessage] | None, instructions: str | None) -> list[ChatMessage]:
+    messages: list[ChatMessage] = list(existing_messages) if existing_messages else []
+    if instructions:
+        instruction_block = instruction_text(instructions).strip()
+        if instruction_block:
+            messages.append(ChatMessage(role="system", content=instruction_block))
+    return messages
+
+
+def _resolved_tool_context(
+    payload: ResponsesRequest,
+    tool_context: BridgeToolContext | None,
+) -> BridgeToolContext:
+    return tool_context or build_tool_context_from_request(payload)
+
+
+def _tool_choice_for_request(
+    payload: ResponsesRequest,
+    tool_context: BridgeToolContext,
+    chat_tools: list[dict[str, Any]] | None,
+) -> Any:
+    if not chat_tools or payload.tool_choice is None:
+        return None
+    return _responses_tool_choice_to_chat(payload.tool_choice, tool_context)
+
+
+def _base_chat_request(
+    payload: ResponsesRequest,
+    *,
+    model_name: str,
+    messages: list[ChatMessage],
+    chat_tools: list[dict[str, Any]] | None,
+    tool_choice: Any,
+) -> ChatCompletionsRequest:
+    return ChatCompletionsRequest(
+        model=model_name,
+        messages=_sanitize_chat_messages(messages),
+        stream=payload.stream,
+        stream_options={"include_usage": True} if payload.stream else None,
+        tools=chat_tools,
+        tool_choice=tool_choice,
+        response_format=_response_format_from_payload(payload),
+        max_tokens=None if is_openai_o_series(model_name) else payload.max_output_tokens,
+        temperature=payload.temperature,
+        top_p=payload.top_p,
+    )
+
+
+def _apply_o_series_token_mapping(
+    request: ChatCompletionsRequest,
+    *,
+    model_name: str,
+    max_output_tokens: int | None,
+) -> None:
+    if is_openai_o_series(model_name) and max_output_tokens is not None:
+        request.max_completion_tokens = max_output_tokens
+
+
+def _apply_passthrough_fields(request: ChatCompletionsRequest, payload: ResponsesRequest) -> None:
+    for field in EXTRA_CHAT_PASSTHROUGH_FIELDS:
+        value = getattr(payload, field, None)
+        if value is not None:
+            setattr(request, field, value)
+
+
+def _apply_reasoning_effort(request: ChatCompletionsRequest, payload: ResponsesRequest) -> None:
+    canonical_effort = _canonical_reasoning_effort(payload)
+    if canonical_effort is not None:
+        request.reasoning_effort = canonical_effort
+
+
 def responses_to_chat_request(
     payload: ResponsesRequest,
     default_model: str,
     tool_context: BridgeToolContext | None = None,
     existing_messages: list[ChatMessage] | None = None,
 ) -> ChatCompletionsRequest:
-    messages: list[ChatMessage] = list(existing_messages) if existing_messages else []
-
-    if payload.instructions:
-        instructions = instruction_text(payload.instructions).strip()
-        if instructions:
-            messages.append(ChatMessage(role="system", content=instructions))
-
-    tool_context = tool_context or build_tool_context_from_request(payload)
-    append_input_items_as_chat_messages(payload, messages, tool_context)
+    messages = _initial_messages(existing_messages, payload.instructions)
+    resolved_tool_context = _resolved_tool_context(payload, tool_context)
+    append_input_items_as_chat_messages(payload, messages, resolved_tool_context)
     messages = collapse_system_messages_to_head(messages)
 
-    stream_options = {"include_usage": True} if payload.stream else None
-    chat_tools = tool_context.chat_tools or None
     model_name = payload.model or default_model
-
-    request = ChatCompletionsRequest(
-        model=model_name,
-        messages=_sanitize_chat_messages(messages),
-        stream=payload.stream,
-        stream_options=stream_options,
-        tools=chat_tools,
-        tool_choice=_responses_tool_choice_to_chat(payload.tool_choice, tool_context) if chat_tools and payload.tool_choice is not None else None,
-        response_format=_response_format_from_payload(payload),
-        max_tokens=None if is_openai_o_series(model_name) else payload.max_output_tokens,
-        temperature=payload.temperature,
-        top_p=payload.top_p,
+    chat_tools = resolved_tool_context.chat_tools or None
+    request = _base_chat_request(
+        payload,
+        model_name=model_name,
+        messages=messages,
+        chat_tools=chat_tools,
+        tool_choice=_tool_choice_for_request(payload, resolved_tool_context, chat_tools),
     )
-    if is_openai_o_series(model_name) and payload.max_output_tokens is not None:
-        request.max_completion_tokens = payload.max_output_tokens
-    for field in EXTRA_CHAT_PASSTHROUGH_FIELDS:
-        value = getattr(payload, field, None)
-        if value is not None:
-            setattr(request, field, value)
-
-    canonical_effort = _canonical_reasoning_effort(payload)
-    if canonical_effort is not None:
-        request.reasoning_effort = canonical_effort
-
+    _apply_o_series_token_mapping(request, model_name=model_name, max_output_tokens=payload.max_output_tokens)
+    _apply_passthrough_fields(request, payload)
+    _apply_reasoning_effort(request, payload)
     return request
