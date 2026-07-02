@@ -62,10 +62,12 @@ def _error_events(
 def _tool_call_events(
     state: ResponsesStreamState,
     tool_calls: list,
+    *,
+    reasoning_hint: str,
 ) -> list[bytes]:
     events: list[bytes] = []
-    reasoning_text = state.active_reasoning_text_for_tools()
-    if reasoning_text:
+    reasoning_text = state.active_reasoning_text_for_tools() or reasoning_hint
+    if state.active_reasoning_text_for_tools():
         events.extend(state.finalize_reasoning_if_open())
     events.extend(state.inline_think.force_to_text(state))
     for tool_call in tool_calls:
@@ -172,10 +174,6 @@ def _process_chat_chunk(
     if reasoning_delta:
         events.extend(state.push_reasoning_delta(reasoning_delta))
 
-    tool_calls = delta.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
-        events.extend(_tool_call_events(state, tool_calls))
-
     state.message.add_annotations(delta.get("annotations"))
 
     content = delta.get("content")
@@ -183,6 +181,10 @@ def _process_chat_chunk(
         events.extend(_string_content_events(state, content, reasoning_delta=reasoning_delta))
     elif isinstance(content, list):
         events.extend(_structured_content_events(state, content))
+
+    tool_calls = delta.get("tool_calls")
+    if isinstance(tool_calls, list) and tool_calls:
+        events.extend(_tool_call_events(state, tool_calls, reasoning_hint=reasoning_delta))
 
     refusal = delta.get("refusal")
     if isinstance(refusal, str) and refusal:

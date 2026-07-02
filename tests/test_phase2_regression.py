@@ -20,6 +20,7 @@ from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.protocol.session import _assistant_message_from_chat_body
 from codex_chat_bridge.stream_chat_to_responses import (
     _chat_message_to_fake_delta,
+    create_responses_sse_from_chat_response,
     create_responses_sse_stream_from_chat_stream,
 )
 from codex_chat_bridge.stream_responses_state import ResponsesStreamState
@@ -276,6 +277,93 @@ def test_stream_accepts_reasoning_field_alias_in_chat_delta() -> None:
     compact = output.replace(" ", "")
     assert "event: response.reasoning_summary_text.done" in output
     assert '"text":"Needcontext."' in compact
+
+
+def _completed_response_output(sse_output: str) -> list[dict[str, Any]]:
+    for block in sse_output.split("\n\n"):
+        if "event: response.completed" not in block:
+            continue
+        data_line = next((line for line in block.splitlines() if line.startswith("data: ")), None)
+        if data_line is None:
+            continue
+        payload = json.loads(data_line[6:])
+        return payload["response"]["output"]
+    raise AssertionError("response.completed event not found")
+
+
+def test_buffered_chat_response_preserves_message_before_tool_call_in_mixed_output() -> None:
+    chat_body = {
+        "id": "chatcmpl_buffered_mixed_output",
+        "model": "demo-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "reasoning_content": "Need tool.",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "shell", "arguments": '{"command":"pwd"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    async def collect() -> str:
+        parts: list[str] = []
+        async for chunk in create_responses_sse_from_chat_response(chat_body):
+            parts.append(chunk.decode())
+        return "".join(parts)
+
+    output = asyncio.run(collect())
+    completed_output = _completed_response_output(output)
+
+    assert [item["type"] for item in completed_output] == ["reasoning", "message", "function_call"]
+    assert completed_output[2]["reasoning_content"] == "Need tool."
+
+
+def test_stream_chunk_preserves_message_before_tool_call_in_mixed_output() -> None:
+    async def upstream_stream():
+        payload = {
+            "id": "chatcmpl_stream_mixed_output",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning_content": "Need tool.",
+                        "content": "hello",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "shell", "arguments": '{"command":"pwd"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+
+    async def collect() -> str:
+        parts: list[str] = []
+        async for chunk in create_responses_sse_stream_from_chat_stream(upstream_stream()):
+            parts.append(chunk.decode())
+        return "".join(parts)
+
+    output = asyncio.run(collect())
+    completed_output = _completed_response_output(output)
+
+    assert [item["type"] for item in completed_output] == ["reasoning", "message", "function_call"]
+    assert completed_output[2]["reasoning_content"] == "Need tool."
 
 
 def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> None:
