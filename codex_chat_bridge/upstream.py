@@ -163,11 +163,15 @@ class UpstreamClient:
                 current_state.body,
                 is_stream=is_stream,
             )
-            if response.status_code != 400:
+            if response.status_code not in (400, 500, 503):
                 return CompatRequestResult(response=response, client=client, request_state=current_state)
 
             error_text = await read_error_text(response)
-            compat_retry = self._compat_policy.retry_state(current_state, error_text)
+            compat_retry = self._compat_policy.retry_state(
+                current_state,
+                error_text,
+                status_code=response.status_code,
+            )
             await close_response_client(response, client)
             if compat_retry is None:
                 self._log_no_compat_retry(is_stream=is_stream, state=current_state, error_text=error_text)

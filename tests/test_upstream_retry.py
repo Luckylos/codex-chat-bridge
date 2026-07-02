@@ -307,6 +307,32 @@ class UpstreamCompatRetryTests(unittest.TestCase):
         self.assertEqual(self.fake_client.captured_requests[1]["reasoning_effort"], "high")
         self.assertEqual(self.fake_client.captured_requests[2]["reasoning_effort"], "high")
 
+    def test_streaming_explicit_tool_choice_empty_stream_error_retries_with_reasoning_none(self) -> None:
+        self.fake_client.response_queue = [
+            FakeResponse(500, text='{"error":{"message":"empty_stream: upstream stream closed before first payload","type":"server_error","code":"internal_server_error"}}'),
+            FakeResponse(200, chunks=[b"ok"]),
+        ]
+        payload = ChatCompletionsRequest.model_validate({
+            "model": "deepseek-v4-flash-codex",
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+            "tool_choice": {"type": "function", "function": {"name": "codex__codex"}},
+            "tools": [{"type": "function", "function": {"name": "codex__codex", "parameters": {"type": "object"}}}],
+        })
+
+        async def collect() -> bytes:
+            parts: list[bytes] = []
+            async for chunk in self.client.stream_chat_completion(payload):
+                parts.append(chunk)
+            return b"".join(parts)
+
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
+            body = asyncio.run(collect())
+
+        self.assertEqual(body, b"ok")
+        self.assertNotIn("reasoning_effort", self.fake_client.captured_requests[0])
+        self.assertEqual(self.fake_client.captured_requests[1]["reasoning_effort"], "none")
+
     def test_retryable_network_exception_retries_non_streaming_request(self) -> None:
         retrying_client = UpstreamClient(Settings(
             upstream_base_url="https://newapi.example.com/v1",

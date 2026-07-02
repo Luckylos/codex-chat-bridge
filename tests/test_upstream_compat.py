@@ -59,6 +59,26 @@ class ExplicitToolChoiceCompatTests(unittest.TestCase):
         self.assertEqual(next_state.body["reasoning_effort"], "none")
         self.assertNotIn("thinking", next_state.body)
 
+    def test_retry_disables_reasoning_for_explicit_tool_choice_on_empty_stream_internal_error(self) -> None:
+        state = build_initial_reasoning_state(
+            {
+                "model": "deepseek-v4-flash",
+                "stream": True,
+                "tool_choice": {"type": "function", "function": {"name": "shell"}},
+            }
+        )
+        retry = UpstreamCompatPolicy().retry_state(
+            state,
+            '{"error":{"message":"empty_stream: upstream stream closed before first payload","type":"server_error","code":"internal_server_error"}}',
+            status_code=500,
+        )
+        assert retry is not None
+        label, next_state = retry
+        self.assertEqual(label, "explicit_tool_choice_disable_reasoning")
+        self.assertEqual(next_state.canonical_effort, "none")
+        self.assertEqual(next_state.body["reasoning_effort"], "none")
+        self.assertNotIn("thinking", next_state.body)
+
     def test_retry_preserves_explicit_reasoning_choice(self) -> None:
         state = build_initial_reasoning_state(
             {

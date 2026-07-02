@@ -17,6 +17,10 @@ CompatPredicate = Callable[[Body, str], bool]
 CompatRewrite = Callable[[Body], Body]
 
 
+def _error_mentions_any(error_body: str, *needles: str) -> bool:
+    return any(_error_mentions(error_body, needle) for needle in needles)
+
+
 @dataclass(frozen=True, slots=True)
 class GenericCompatRule:
     label: str
@@ -110,6 +114,8 @@ class UpstreamCompatPolicy:
         self,
         state: ReasoningRequestState,
         error_body: str,
+        *,
+        status_code: int = 400,
     ) -> tuple[str, ReasoningRequestState] | None:
         """Retry explicit tool_choice requests with reasoning disabled.
 
@@ -124,10 +130,18 @@ class UpstreamCompatPolicy:
             return None
         if not _has_explicit_tool_choice_object(state.body):
             return None
-        if not _error_mentions(error_body, "tool_choice"):
-            return None
-        if not _error_mentions(error_body, "thinking mode"):
-            return None
+        if status_code == 400:
+            if not _error_mentions(error_body, "tool_choice"):
+                return None
+            if not _error_mentions(error_body, "thinking mode"):
+                return None
+        else:
+            if status_code not in (500, 503):
+                return None
+            if not state.body.get("stream"):
+                return None
+            if not _error_mentions_any(error_body, "empty_stream", "upstream stream closed before first payload"):
+                return None
         return "explicit_tool_choice_disable_reasoning", _next_state(
             state,
             body=_rewrite_fields(state.body, thinking=None, reasoning_effort="none"),
@@ -155,14 +169,24 @@ class UpstreamCompatPolicy:
         self,
         state: ReasoningRequestState,
         error_body: str,
+        *,
+        status_code: int = 400,
     ) -> tuple[str, ReasoningRequestState] | None:
-        generic_retry = self.generic_retry_state(state, error_body)
-        if generic_retry is not None:
-            return generic_retry
+        if status_code == 400:
+            generic_retry = self.generic_retry_state(state, error_body)
+            if generic_retry is not None:
+                return generic_retry
 
-        explicit_tool_choice_retry = self.explicit_tool_choice_thinking_mode_retry_state(state, error_body)
+        explicit_tool_choice_retry = self.explicit_tool_choice_thinking_mode_retry_state(
+            state,
+            error_body,
+            status_code=status_code,
+        )
         if explicit_tool_choice_retry is not None:
             return explicit_tool_choice_retry
+
+        if status_code != 400:
+            return None
 
         reasoning_retry = build_reasoning_fallback_state(state, error_body)
         if reasoning_retry is not None:
