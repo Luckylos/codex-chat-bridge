@@ -103,11 +103,6 @@ class ToolStateStore:
         state.nested_resolved = True
         return True
 
-    def _emit_argument_delta(self, state: ToolCallState, kind: ToolKind, delta: str | None) -> list[bytes]:
-        if kind.is_custom or delta is None:
-            return []
-        return [function_arguments_delta(state.item_id, state.output_index, delta)]
-
     def _emit_buffered_nested_events(
         self,
         envelope: ResponseEnvelopeState,
@@ -139,7 +134,8 @@ class ToolStateStore:
         if added_now and state.arguments and not kind.is_custom:
             events.append(function_arguments_delta(state.item_id, state.output_index, state.arguments))
             return events
-        events.extend(self._emit_argument_delta(state, kind, args_delta))
+        if not kind.is_custom and args_delta is not None:
+            events.append(function_arguments_delta(state.item_id, state.output_index, args_delta))
         return events
 
     def _flush_buffered_nested_state(self, state: ToolCallState) -> None:
@@ -152,21 +148,6 @@ class ToolStateStore:
             state.name,
         )
         state.nested_buffered = False
-
-    def _completion_events(
-        self,
-        state: ToolCallState,
-        emission: CompletedToolEmission,
-        kind: ToolKind,
-    ) -> list[bytes]:
-        if kind.is_custom:
-            input_text = emission.input_text or ""
-            events = []
-            if input_text:
-                events.append(custom_input_delta(state.item_id, state.output_index, input_text))
-            events.append(custom_input_done(state.item_id, state.output_index, input_text))
-            return events
-        return [function_arguments_done(state.item_id, state.output_index, emission.arguments)]
 
     def _finalize_state(
         self,
@@ -183,7 +164,13 @@ class ToolStateStore:
         state.done = True
         kind = resolve_tool_kind(self.tool_context, state.name)
         emission = build_completed_item(state, kind)
-        events.extend(self._completion_events(state, emission, kind))
+        if kind.is_custom:
+            input_text = emission.input_text or ""
+            if input_text:
+                events.append(custom_input_delta(state.item_id, state.output_index, input_text))
+            events.append(custom_input_done(state.item_id, state.output_index, input_text))
+        else:
+            events.append(function_arguments_done(state.item_id, state.output_index, emission.arguments))
         events.append(output_item_done(state.output_index, emission.item))
         envelope.append_completed_item(state.output_index, emission.item)
         return events

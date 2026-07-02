@@ -22,6 +22,7 @@ from codex_chat_bridge.stream_responses_state import ResponsesStreamState
 from codex_chat_bridge.stream_state.envelope import ResponseEnvelopeState
 from codex_chat_bridge.stream_state.message import MessageState
 from codex_chat_bridge.stream_state.reasoning import ReasoningState
+from codex_chat_bridge.stream_state.tools import ToolStateStore
 
 
 def _single_upstream_settings() -> Settings:
@@ -245,6 +246,38 @@ def test_stream_assistant_message_preserves_tool_calls_and_reasoning_for_replay(
     assert assistant.tool_calls[0]["id"] == "call_weather"
     assert assistant.tool_calls[0]["function"]["name"] == "weather"
     assert assistant.reasoning_content == "Need tool first."
+
+
+def test_tool_state_finalize_custom_tool_preserves_reasoning_and_done_events() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    store = ToolStateStore(context)
+    envelope = ResponseEnvelopeState(response_id="resp_custom_tool_finalize")
+
+    store.push_delta(
+        envelope,
+        {
+            "index": 0,
+            "id": "call_exec",
+            "function": {"name": "exec", "arguments": '{"input":"pwd"}'},
+        },
+        reasoning="Need shell access.",
+    )
+    events = b"".join(store.finalize(envelope)).decode()
+
+    assert "event: response.custom_tool_call_input.done" in events
+    assert "event: response.output_item.done" in events
+    assert envelope.completed_output_items() == [
+        {
+            "id": "ctc_call_exec",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": "pwd",
+            "reasoning_content": "Need shell access.",
+        }
+    ]
 
 
 def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:
