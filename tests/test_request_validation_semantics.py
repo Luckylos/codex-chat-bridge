@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
-from fastapi.testclient import TestClient
+import httpx
 
 from codex_chat_bridge.api.routes import app
 from codex_chat_bridge.config import Settings
@@ -15,6 +16,16 @@ def _single_upstream_settings() -> Settings:
         upstream_api_key="test-key",
         upstream_timeout_seconds=30,
     )
+
+
+async def _request(method: str, path: str, **kwargs):
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.request(method, path, **kwargs)
+
+
+def _request_sync(method: str, path: str, **kwargs):
+    return asyncio.run(_request(method, path, **kwargs))
 
 
 class RequestValidationSemanticsTests(unittest.TestCase):
@@ -37,11 +48,10 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
-            response = client.post("/v1/responses", json={
+            response = _request_sync("POST", "/v1/responses", json={
                 "model": "test-model",
                 "input": [{"role": "user", "content": [{"type": "input_text", "text": "hello from chat item"}]}],
             })
@@ -70,11 +80,10 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
-            response = client.post("/v1/responses", json={
+            response = _request_sync("POST", "/v1/responses", json={
                 "model": "test-model",
                 "input": [
                     {"role": "user", "content": "trigger"},
@@ -120,11 +129,10 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
-            response = client.post("/v1/responses", json={
+            response = _request_sync("POST", "/v1/responses", json={
                 "model": "test-model",
                 "input": [
                     {"role": "developer", "content": [{"type": "input_text", "text": "dev note"}]},
@@ -164,7 +172,6 @@ class RequestValidationSemanticsTests(unittest.TestCase):
             async def list_models(self):
                 return []
 
-        client = TestClient(app)
         fake = FakeUpstream(None)
         fake.settings = None
 
@@ -172,7 +179,7 @@ class RequestValidationSemanticsTests(unittest.TestCase):
             "codex_chat_bridge.api.response_service.UpstreamClient", return_value=fake,
         ):
             # First request
-            resp_a = client.post("/v1/responses", json={
+            resp_a = _request_sync("POST", "/v1/responses", json={
                 "model": "test-model",
                 "input": [{"role": "user", "content": "first"}],
             })
@@ -180,7 +187,7 @@ class RequestValidationSemanticsTests(unittest.TestCase):
             rid = resp_a.json()["id"]
 
             # Second request — also uses chat format items
-            resp_b = client.post("/v1/responses", json={
+            resp_b = _request_sync("POST", "/v1/responses", json={
                 "previous_response_id": rid,
                 "input": [{"role": "user", "content": "second"}, {"role": "user", "content": "third"}],
             })
@@ -213,11 +220,10 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient", FakeUpstreamClient,
         ):
-            response = client.post("/v1/responses", json={
+            response = _request_sync("POST", "/v1/responses", json={
                 "model": "test-model",
                 "input": [{"role": "unknown_bot", "content": "hello"}],
             })
@@ -237,12 +243,11 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     {"id": "deepseek-v4-flash", "object": "model", "owned_by": "openai"},
                 ]
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.routes.UpstreamClient",
             FakeUpstreamClient,
         ):
-            response = client.get("/v1/models")
+            response = _request_sync("GET", "/v1/models")
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -257,12 +262,11 @@ class RequestValidationSemanticsTests(unittest.TestCase):
             def __init__(self, settings) -> None:
                 raise AssertionError("UpstreamClient should not be instantiated for empty effective input")
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient",
             UpstreamShouldNotBeCalled,
         ):
-            response = client.post(
+            response = _request_sync("POST", 
                 "/v1/responses",
                 json={
                     "model": "deepseek-v4-flash",
@@ -283,12 +287,11 @@ class RequestValidationSemanticsTests(unittest.TestCase):
             def __init__(self, settings) -> None:
                 raise AssertionError("UpstreamClient should not be instantiated for blank effective input")
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient",
             UpstreamShouldNotBeCalled,
         ):
-            response = client.post(
+            response = _request_sync("POST", 
                 "/v1/responses",
                 json={"model": "deepseek-v4-flash", "input": "   \n  \t"},
             )
@@ -304,12 +307,11 @@ class RequestValidationSemanticsTests(unittest.TestCase):
             def __init__(self, settings) -> None:
                 raise AssertionError("UpstreamClient should not be instantiated when model is missing")
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient",
             UpstreamShouldNotBeCalled,
         ):
-            response = client.post("/v1/responses", json={"input": "ping"})
+            response = _request_sync("POST", "/v1/responses", json={"input": "ping"})
 
         self.assertEqual(response.status_code, 400)
         body = response.json()
@@ -340,12 +342,11 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient",
             FakeUpstreamClient,
         ):
-            response = client.post(
+            response = _request_sync("POST", 
                 "/v1/responses",
                 json={
                     "model": "deepseek-v4-flash",
@@ -389,12 +390,11 @@ class RequestValidationSemanticsTests(unittest.TestCase):
                     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
                 }
 
-        client = TestClient(app)
         with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
             "codex_chat_bridge.api.response_service.UpstreamClient",
             FakeUpstreamClient,
         ):
-            response = client.post(
+            response = _request_sync("POST", 
                 "/v1/responses",
                 json={"model": "deepseek-v4-flash", "instructions": "be helpful", "input": "   \n  \t"},
             )
@@ -436,7 +436,6 @@ class PreviousResponseIdIntegrationTests(unittest.TestCase):
             async def list_models(self):
                 return []
 
-        client = TestClient(app)
         fake = FakeUpstream(None)
         fake.settings = None
 
@@ -444,7 +443,7 @@ class PreviousResponseIdIntegrationTests(unittest.TestCase):
             "codex_chat_bridge.api.response_service.UpstreamClient", return_value=fake,
         ):
             # Request A
-            resp_a = client.post("/v1/responses", json={
+            resp_a = _request_sync("POST", "/v1/responses", json={
                 "model": "test-model",
                 "input": "First message",
             })
@@ -455,12 +454,11 @@ class PreviousResponseIdIntegrationTests(unittest.TestCase):
             self.assertEqual(fake.call_count, 1)
 
             # Request B with previous_response_id
-            resp_b = client.post("/v1/responses", json={
+            resp_b = _request_sync("POST", "/v1/responses", json={
                 "previous_response_id": rid,
                 "input": "Second message",
             })
             self.assertEqual(resp_b.status_code, 200)
-            body_b = resp_b.json()
 
             # Session was saved: upstream received context + new input
             self.assertEqual(fake.call_count, 2)

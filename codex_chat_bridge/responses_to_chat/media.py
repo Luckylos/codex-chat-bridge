@@ -9,7 +9,7 @@ from .errors import UnsupportedResponsesInputItemError
 _ALLOWED_MEDIA_SCHEMES = ("https://", "data:")
 
 
-def _is_safe_media_url(url: str | None, *, allowed_data_prefix: str | None = None) -> bool:
+def _is_safe_media_url(url: object, *, allowed_data_prefix: str | None = None) -> bool:
     """Check if a media URL is safe (prevents SSRF and internal network leaks).
 
     Allowed schemes:
@@ -36,12 +36,12 @@ def _is_safe_media_url(url: str | None, *, allowed_data_prefix: str | None = Non
 # Backward-compatible aliases
 
 
-def is_safe_image_url(url: str | None) -> bool:
+def is_safe_image_url(url: object) -> bool:
     """Check if an image URL is safe (prevents SSRF and internal network leaks)."""
     return _is_safe_media_url(url, allowed_data_prefix="data:image/")
 
 
-def is_safe_audio_url(url: str | None) -> bool:
+def is_safe_audio_url(url: object) -> bool:
     """Check if an audio URL is safe (prevents SSRF and internal network leaks)."""
     return _is_safe_media_url(url, allowed_data_prefix="data:audio/")
 

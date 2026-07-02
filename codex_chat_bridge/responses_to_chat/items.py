@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any, Literal, cast
+from typing import Literal, cast
 from ..protocol.types import ChatToolCall, ResponsesInputItem
 
 from ..bridge_context import BridgeToolContext, TOOL_SEARCH_PROXY_NAME, custom_tool_input_to_chat_arguments, canonical_json_string

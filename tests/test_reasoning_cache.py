@@ -14,14 +14,14 @@ from codex_chat_bridge.models import ChatMessage, ResponsesRequest
 from codex_chat_bridge.bridge_context import BridgeToolContext
 from codex_chat_bridge.protocol.session import (
     SessionRecord,
-    SessionStore,
     extract_reasoning_cache,
     apply_reasoning_cache,
-    resolve_session,
     save_session,
+    resolve_session,
     get_session_store,
     reset_session_store,
 )
+
 
 
 class ExtractReasoningCacheTests(unittest.TestCase):
@@ -198,7 +198,6 @@ class ReasoningCacheSessionIntegrationTests(unittest.TestCase):
 
     def test_cache_survives_save_and_resolve(self) -> None:
         """Full lifecycle: assistant with reasoning+tool_calls → save → resolve → reasoning restored."""
-        store = get_session_store()
 
         # Turn 1: model thinks, then calls a tool
         messages_turn1 = [

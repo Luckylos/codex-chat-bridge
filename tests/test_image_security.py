@@ -29,7 +29,7 @@ class ImageUrlSecurityTests(unittest.TestCase):
         self.assertFalse(is_safe_image_url(None))
 
     def test_non_string_is_rejected(self) -> None:
-        self.assertFalse(is_safe_image_url(123))  # type: ignore[arg-type]
+        self.assertFalse(is_safe_image_url(123))
 
     def test_chat_image_part_rejects_http_url(self) -> None:
         with self.assertRaises(UnsupportedResponsesInputItemError):

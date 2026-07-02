@@ -8,7 +8,6 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from fastapi.testclient import TestClient
 
 from codex_chat_bridge.api import response_service, routes
 from codex_chat_bridge.api.policy import message_has_semantic_content
@@ -57,6 +56,16 @@ async def _collect_stream_chunks(response) -> list[bytes]:
     return [chunk async for chunk in response.body_iterator]
 
 
+async def _request(method: str, path: str, **kwargs):
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        return await client.request(method, path, **kwargs)
+
+
+def _request_sync(method: str, path: str, **kwargs):
+    return asyncio.run(_request(method, path, **kwargs))
+
+
 def test_health_reads_upstream_reachable_from_request_app_state_dynamically() -> None:
     state = SimpleNamespace(health_upstream_reachable=True)
     request = SimpleNamespace(app=SimpleNamespace(state=state))
@@ -83,11 +92,10 @@ def test_models_http_status_error_uses_bridge_error_envelope() -> None:
                 {"error": {"message": "catalog unavailable"}},
             )
 
-    client = TestClient(app)
     with patch("codex_chat_bridge.api.routes.get_settings", return_value=_single_upstream_settings()), patch(
         "codex_chat_bridge.api.routes.UpstreamClient", FailingUpstreamClient,
     ):
-        response = client.get("/v1/models")
+        response = _request_sync("GET", "/v1/models")
 
     body = response.json()
     assert response.status_code == 503
@@ -114,11 +122,10 @@ def test_create_response_http_status_error_uses_bridge_error_envelope() -> None:
                 {"error": {"message": "rate limited"}},
             )
 
-    client = TestClient(app)
     with patch("codex_chat_bridge.api.response_service.get_settings", return_value=_single_upstream_settings()), patch(
         "codex_chat_bridge.api.response_service.UpstreamClient", FailingUpstreamClient,
     ):
-        response = client.post("/v1/responses", json={"model": "test-model", "input": "hello"})
+        response = _request_sync("POST", "/v1/responses", json={"model": "test-model", "input": "hello"})
 
     body = response.json()
     assert response.status_code == 429

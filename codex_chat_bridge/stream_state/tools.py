@@ -18,7 +18,6 @@ from .tool_events import (
     output_item_done,
 )
 from .tool_items import (
-    CompletedToolEmission,
     ToolCallState,
     ToolKind,
     build_completed_item,

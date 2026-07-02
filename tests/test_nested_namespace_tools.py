@@ -14,12 +14,9 @@ from __future__ import annotations
 
 import json
 import unittest
-from unittest.mock import patch
 
-from codex_chat_bridge.bridge_context import BridgeToolContext, build_tool_context_from_request
-from codex_chat_bridge.bridge_context.models import ToolSpec
+from codex_chat_bridge.bridge_context import BridgeToolContext
 from codex_chat_bridge.chat_to_responses.tools import tool_call_to_response_item, _nested_namespace_call_to_response_item
-from codex_chat_bridge.models import ResponsesRequest
 from codex_chat_bridge.stream_state import ResponseEnvelopeState, ToolStateStore
 
 
