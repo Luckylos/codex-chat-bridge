@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from codex_chat_bridge.api import response_service, routes
 from codex_chat_bridge.api.policy import message_has_semantic_content
 from codex_chat_bridge.api.routes import app
-from codex_chat_bridge.bridge_context import BridgeToolContext
+from codex_chat_bridge.bridge_context import BridgeToolContext, build_tool_context_from_request
 from codex_chat_bridge.config import Settings
 from codex_chat_bridge.errors import InvalidRequestError, UnsupportedInputItemError
 from codex_chat_bridge.models import ChatMessage, ResponsesRequest
@@ -699,6 +699,58 @@ def test_stream_saved_session_resolves_nested_namespace_chat_tool_shape_for_repl
     assert model == "demo-model"
 
 
+def test_resolve_session_preserves_tool_search_output_discovered_namespace_tools_for_continuation() -> None:
+    payload = ResponsesRequest.model_validate(
+        {
+            "model": "demo-model",
+            "tools": [{"type": "tool_search"}],
+            "input": [
+                {
+                    "type": "tool_search_output",
+                    "call_id": "call_tool_search_1",
+                    "status": "completed",
+                    "execution": "client",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "mcp__codex_apps__gmail",
+                            "tools": [
+                                {
+                                    "type": "function",
+                                    "name": "_search_emails",
+                                    "parameters": {
+                                        "type": "object",
+                                        "properties": {"query": {"type": "string"}},
+                                        "required": ["query"],
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+    tool_context = build_tool_context_from_request(payload)
+    save_session("resp_tool_search_ctx", [], tool_context, "demo-model")
+
+    continuation = ResponsesRequest.model_validate(
+        {
+            "model": "demo-model",
+            "previous_response_id": "resp_tool_search_ctx",
+            "input": "continue",
+        }
+    )
+    msgs, merged_ctx, model = resolve_session(continuation)
+
+    assert msgs == []
+    assert merged_ctx is not None
+    chat_tool_names = [tool["function"]["name"] for tool in merged_ctx.chat_tools if tool.get("type") == "function"]
+    assert "tool_search" in chat_tool_names
+    assert "mcp__codex_apps__gmail___search_emails" in chat_tool_names
+    assert model == "demo-model"
+
+
 def test_tool_state_finalize_custom_tool_preserves_reasoning_and_done_events() -> None:
     context = BridgeToolContext()
     context.add_custom_tool({"type": "custom", "name": "exec"})
@@ -1190,6 +1242,45 @@ def test_stream_truncated_preserves_reasoning_message_and_parallel_tools_in_cano
     assert response["incomplete_details"] == {"reason": "stream_truncated"}
     assert [item["type"] for item in response["output"]] == ["reasoning", "message", "custom_tool_call", "function_call", "tool_search_call"]
     assert [item.get("call_id") for item in response["output"][2:]] == ["call_exec", "call_fn", "call_search"]
+
+
+def test_stream_failed_and_truncated_events_preserve_request_echo_alongside_session_relevant_output() -> None:
+    request_echo = {
+        "previous_response_id": "resp_prev_123",
+        "instructions": "be terse",
+        "metadata": {"trace": "abc"},
+        "parallel_tool_calls": True,
+    }
+
+    for terminal_kind in ("failed", "truncated"):
+        context = BridgeToolContext()
+        context.add_custom_tool({"type": "custom", "name": "exec"})
+        state = ResponsesStreamState(context, response_id=f"resp_echo_{terminal_kind}")
+        state.envelope.set_request_echo(request_echo)
+        state.push_reasoning_delta("Need tool.")
+        state.push_text_delta("hello")
+        state.push_tool_call_delta(
+            {"index": 0, "id": "call_exec", "function": {"name": "exec", "arguments": '{"input":"pwd"}'}},
+            "Need tool.",
+        )
+
+        if terminal_kind == "failed":
+            output = b"".join(state.fail("bad request", "invalid_request_error")).decode()
+            response = _response_payload_for_event(output, "response.failed")
+            assert response["status"] == "failed"
+            assert response["error"] == {"message": "bad request", "type": "invalid_request_error"}
+        else:
+            output = b"".join(state.finalize()).decode()
+            response = _response_payload_for_event(output, "response.completed")
+            assert response["status"] == "incomplete"
+            assert response["incomplete_details"] == {"reason": "stream_truncated"}
+
+        assert response["previous_response_id"] == "resp_prev_123"
+        assert response["instructions"] == "be terse"
+        assert response["metadata"] == {"trace": "abc"}
+        assert response["parallel_tool_calls"] is True
+        assert [item["type"] for item in response["output"]] == ["reasoning", "message", "custom_tool_call"]
+        assert response["output"][2]["call_id"] == "call_exec"
 
 
 def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:
