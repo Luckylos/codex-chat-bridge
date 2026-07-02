@@ -41,10 +41,21 @@ class ToolStateStore:
         self.tool_context = tool_context
         self.tool_calls: dict[int, ToolCallState] = {}
         self.finalized = False
+        self._tool_output_base: int | None = None
 
-    def _ensure_output_index(self, envelope: ResponseEnvelopeState, state: ToolCallState) -> int:
-        if state.output_index is None:
-            state.output_index = envelope.allocate_output_index()
+    def _ensure_output_index(
+        self,
+        envelope: ResponseEnvelopeState,
+        state: ToolCallState,
+        index: int,
+    ) -> int:
+        if state.output_index is not None:
+            return state.output_index
+        if self._tool_output_base is None:
+            self._tool_output_base = envelope.next_output_index
+        state.output_index = self._tool_output_base + index
+        if envelope.next_output_index <= state.output_index:
+            envelope.next_output_index = state.output_index + 1
         return state.output_index
 
     def _ensure_added(
@@ -58,7 +69,7 @@ class ToolStateStore:
         state.added = True
         kind = resolve_tool_kind(self.tool_context, state.name)
         ensure_tool_identity(state, index, kind)
-        output_index = self._ensure_output_index(envelope, state)
+        output_index = self._ensure_output_index(envelope, state, index)
         item = build_in_progress_item(state, kind, self.tool_context)
         return [output_item_added(output_index, item)], kind
 
@@ -77,7 +88,12 @@ class ToolStateStore:
             state.reasoning_content = reasoning
         return args_delta if isinstance(args_delta, str) and args_delta else None
 
-    def _maybe_start_nested_buffer(self, envelope: ResponseEnvelopeState, state: ToolCallState) -> None:
+    def _maybe_start_nested_buffer(
+        self,
+        envelope: ResponseEnvelopeState,
+        state: ToolCallState,
+        index: int,
+    ) -> None:
         if state.added or state.nested_buffered or state.nested_resolved:
             return
         spec = _nested_namespace_spec(self.tool_context, state.name)
@@ -88,7 +104,7 @@ class ToolStateStore:
             state.name,
             spec.actions,
         )
-        self._ensure_output_index(envelope, state)
+        self._ensure_output_index(envelope, state, index)
         state.nested_buffered = True
 
     def _try_resolve_nested_buffer(self, state: ToolCallState) -> bool:
@@ -132,7 +148,7 @@ class ToolStateStore:
         args_delta = self._apply_tool_call_delta(state, tool_call, reasoning)
 
         if not state.added and (state.call_id or state.name):
-            self._maybe_start_nested_buffer(envelope, state)
+            self._maybe_start_nested_buffer(envelope, state, index)
         if state.nested_buffered:
             return self._emit_buffered_nested_events(envelope, state, index)
 

@@ -557,6 +557,208 @@ def test_tool_state_finalize_custom_tool_preserves_reasoning_and_done_events() -
     ]
 
 
+def test_tool_state_parallel_mixed_families_preserve_completed_output_order_by_index() -> None:
+    context = BridgeToolContext()
+    context.add_custom_tool({"type": "custom", "name": "exec"})
+    context.add_tool_search_tool()
+    store = ToolStateStore(context)
+    envelope = ResponseEnvelopeState(response_id="resp_parallel_mixed_tools")
+
+    chunks: list[bytes] = []
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 2,
+                "id": "call_search",
+                "function": {"name": "tool_search"},
+            },
+            reasoning="Need several tools.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_exec",
+                "function": {"name": "exec"},
+            },
+            reasoning="Need several tools.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 1,
+                "id": "call_fn",
+                "function": {"name": "read_file", "arguments": '{"path":"/tmp/x"}'},
+            },
+            reasoning="Need several tools.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 2,
+                "function": {"arguments": '{"query":"gmail"}'},
+            },
+            reasoning="Need several tools.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"input":"p'},
+            },
+            reasoning="Need several tools.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": 'wd"}'},
+            },
+            reasoning="Need several tools.",
+        )
+    )
+    chunks.extend(store.finalize(envelope))
+    output = b"".join(chunks).decode()
+
+    assert '"call_id": "call_search", "execution": "client", "arguments": {}, "reasoning_content": "Need several tools."' in output
+    assert envelope.completed_output_items() == [
+        {
+            "id": "ctc_call_exec",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_exec",
+            "name": "exec",
+            "input": "pwd",
+            "reasoning_content": "Need several tools.",
+        },
+        {
+            "id": "fc_call_fn",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_fn",
+            "name": "read_file",
+            "arguments": '{"path":"/tmp/x"}',
+            "reasoning_content": "Need several tools.",
+        },
+        {
+            "id": "fc_call_search",
+            "type": "tool_search_call",
+            "status": "completed",
+            "call_id": "call_search",
+            "execution": "client",
+            "arguments": {"query": "gmail"},
+            "reasoning_content": "Need several tools.",
+        },
+    ]
+
+
+def test_tool_state_interleaved_partial_argument_chunks_preserve_per_call_outputs() -> None:
+    context = BridgeToolContext()
+    context.add_tool_search_tool()
+    store = ToolStateStore(context)
+    envelope = ResponseEnvelopeState(response_id="resp_interleaved_partial_args")
+
+    chunks: list[bytes] = []
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "id": "call_fn",
+                "function": {"name": "read_file"},
+            },
+            reasoning="Need file and search.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 1,
+                "id": "call_search",
+                "function": {"name": "tool_search"},
+            },
+            reasoning="Need file and search.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": '{"path":"/tmp/'},
+            },
+            reasoning="Need file and search.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 1,
+                "function": {"arguments": '{"query":"gm'},
+            },
+            reasoning="Need file and search.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 0,
+                "function": {"arguments": 'x"}'},
+            },
+            reasoning="Need file and search.",
+        )
+    )
+    chunks.extend(
+        store.push_delta(
+            envelope,
+            {
+                "index": 1,
+                "function": {"arguments": 'ail"}'},
+            },
+            reasoning="Need file and search.",
+        )
+    )
+    chunks.extend(store.finalize(envelope))
+    output = b"".join(chunks).decode()
+
+    assert output.count('"item_id": "fc_call_fn"') >= 3
+    assert output.count('"item_id": "fc_call_search"') >= 3
+    assert envelope.completed_output_items() == [
+        {
+            "id": "fc_call_fn",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": "call_fn",
+            "name": "read_file",
+            "arguments": '{"path":"/tmp/x"}',
+            "reasoning_content": "Need file and search.",
+        },
+        {
+            "id": "fc_call_search",
+            "type": "tool_search_call",
+            "status": "completed",
+            "call_id": "call_search",
+            "execution": "client",
+            "arguments": {"query": "gmail"},
+            "reasoning_content": "Need file and search.",
+        },
+    ]
+
+
 def test_stream_finalize_marks_tool_calls_as_in_progress() -> None:
     state = ResponsesStreamState(response_id="resp_tool_calls")
     state.push_tool_call_delta(
