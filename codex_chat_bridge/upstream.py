@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 import logging
 from typing import Any
 
@@ -25,6 +26,13 @@ _logger = logging.getLogger("codex-chat-bridge.upstream")
 # Keep stable module-level names for tests and existing callers.
 _retryable_status = retryable_status
 _backoff_delay = backoff_delay
+
+
+@dataclass(frozen=True, slots=True)
+class CompatRequestResult:
+    response: httpx.Response
+    client: httpx.AsyncClient | None
+    request_state: ReasoningRequestState
 
 
 class UpstreamClient:
@@ -64,6 +72,78 @@ class UpstreamClient:
             headers["Authorization"] = f"Bearer {self._settings.upstream_api_key}"
         return headers
 
+    @staticmethod
+    def _request_kind(is_stream: bool) -> str:
+        return "stream" if is_stream else "body"
+
+    def _log_no_compat_retry(
+        self,
+        *,
+        is_stream: bool,
+        state: ReasoningRequestState,
+        error_text: str,
+    ) -> None:
+        _logger.warning(
+            "upstream 400 with no compatible retry: stream=%s model=%s %.200s",
+            is_stream,
+            state.body.get("model"),
+            error_text,
+        )
+
+    def _log_compat_retry(
+        self,
+        *,
+        is_stream: bool,
+        state: ReasoningRequestState,
+        compat_label: str,
+        next_state: ReasoningRequestState,
+    ) -> None:
+        _logger.info(
+            "upstream 400 retry: stream=%s model=%s compat=%s from=%s to=%s effort=%s",
+            is_stream,
+            state.body.get("model"),
+            compat_label,
+            state.wire_mode,
+            next_state.wire_mode,
+            state.canonical_effort,
+        )
+
+    def _log_retryable_status(
+        self,
+        *,
+        is_stream: bool,
+        status_code: int,
+        attempt: int,
+        max_retries: int,
+        delay: float,
+    ) -> None:
+        _logger.warning(
+            "upstream %d %s (attempt %d/%d) — retry in %.1fs",
+            status_code,
+            self._request_kind(is_stream),
+            attempt + 1,
+            max_retries + 1,
+            delay,
+        )
+
+    def _log_retryable_exception(
+        self,
+        *,
+        is_stream: bool,
+        exc: Exception,
+        attempt: int,
+        max_retries: int,
+        delay: float,
+    ) -> None:
+        _logger.warning(
+            "upstream %s network error %r (attempt %d/%d) — retry in %.1fs",
+            self._request_kind(is_stream),
+            exc,
+            attempt + 1,
+            max_retries + 1,
+            delay,
+        )
+
     async def _send_with_compat_retry(
         self,
         url: str,
@@ -71,7 +151,7 @@ class UpstreamClient:
         body: dict[str, Any],
         *,
         is_stream: bool,
-    ) -> tuple[httpx.Response, httpx.AsyncClient | None, ReasoningRequestState]:
+    ) -> CompatRequestResult:
         current_state = build_initial_reasoning_state(body)
 
         while True:
@@ -84,29 +164,21 @@ class UpstreamClient:
                 is_stream=is_stream,
             )
             if response.status_code != 400:
-                return response, client, current_state
+                return CompatRequestResult(response=response, client=client, request_state=current_state)
 
             error_text = await read_error_text(response)
             compat_retry = self._compat_policy.retry_state(current_state, error_text)
             await close_response_client(response, client)
             if compat_retry is None:
-                _logger.warning(
-                    "upstream 400 with no compatible retry: stream=%s model=%s %.200s",
-                    is_stream,
-                    current_state.body.get("model"),
-                    error_text,
-                )
-                return response, None, current_state
+                self._log_no_compat_retry(is_stream=is_stream, state=current_state, error_text=error_text)
+                return CompatRequestResult(response=response, client=None, request_state=current_state)
 
             compat_label, next_state = compat_retry
-            _logger.info(
-                "upstream 400 retry: stream=%s model=%s compat=%s from=%s to=%s effort=%s",
-                is_stream,
-                current_state.body.get("model"),
-                compat_label,
-                current_state.wire_mode,
-                next_state.wire_mode,
-                current_state.canonical_effort,
+            self._log_compat_retry(
+                is_stream=is_stream,
+                state=current_state,
+                compat_label=compat_label,
+                next_state=next_state,
             )
             current_state = next_state
 
@@ -118,54 +190,54 @@ class UpstreamClient:
         *,
         is_stream: bool,
     ) -> tuple[httpx.Response, httpx.AsyncClient | None]:
-        max_retries = self._settings.upstream_max_retries
+        max_retries_raw = self._settings.upstream_max_retries
+        assert isinstance(max_retries_raw, int)
+        max_retries = max_retries_raw
         current_body = dict(body)
 
         for attempt in range(max_retries + 1):
             try:
-                response, client, request_state = await self._send_with_compat_retry(
+                result = await self._send_with_compat_retry(
                     url,
                     headers,
                     current_body,
                     is_stream=is_stream,
                 )
-                current_body = request_state.body
+                current_body = result.request_state.body
 
-                if retryable_status(response.status_code) and attempt < max_retries:
-                    await close_response_client(response, client)
+                if retryable_status(result.response.status_code) and attempt < max_retries:
+                    await close_response_client(result.response, result.client)
                     delay = backoff_delay(attempt)
-                    _logger.warning(
-                        "upstream %d %s (attempt %d/%d) — retry in %.1fs",
-                        response.status_code,
-                        "stream" if is_stream else "body",
-                        attempt + 1,
-                        max_retries + 1,
-                        delay,
+                    self._log_retryable_status(
+                        is_stream=is_stream,
+                        status_code=result.response.status_code,
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        delay=delay,
                     )
                     await asyncio.sleep(delay)
                     continue
 
-                response.raise_for_status()
-                return response, client
+                result.response.raise_for_status()
+                return result.response, result.client
 
             except Exception as exc:
                 if retryable_exception(exc) and attempt < max_retries:
                     delay = backoff_delay(attempt)
-                    _logger.warning(
-                        "upstream %s network error %r (attempt %d/%d) — retry in %.1fs",
-                        "stream" if is_stream else "body",
-                        exc,
-                        attempt + 1,
-                        max_retries + 1,
-                        delay,
+                    self._log_retryable_exception(
+                        is_stream=is_stream,
+                        exc=exc,
+                        attempt=attempt,
+                        max_retries=max_retries,
+                        delay=delay,
                     )
                     await asyncio.sleep(delay)
                     continue
                 raise
 
         # Unreachable if retry logic is correct: every branch either
-        # returns or raises.  Propagate as UpstreamError rather than
-        # a bare RuntimeError so callers get a meaningful error type.
+        # returns or raises. Propagate as UpstreamError rather than a bare
+        # RuntimeError so callers get a meaningful error type.
         raise UpstreamError("Retry loop exhausted without a conclusive result", code="retry_exhausted")
 
     async def create_chat_completion(self, payload: Any) -> dict[str, Any]:

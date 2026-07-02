@@ -53,7 +53,7 @@ class FakeResponse:
 
 class FakeAsyncClient:
     def __init__(self, *args, **kwargs) -> None:
-        self.response_queue: list[FakeResponse] = []
+        self.response_queue: list[FakeResponse | Exception] = []
         self.captured_requests: list[dict] = []
 
     async def __aenter__(self):
@@ -83,7 +83,10 @@ class FakeAsyncClient:
     def _next_response(self) -> FakeResponse:
         if not self.response_queue:
             raise AssertionError("FakeAsyncClient.response_queue is empty")
-        return self.response_queue.pop(0)
+        result = self.response_queue.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 class RetryLogicTests(unittest.TestCase):
@@ -274,3 +277,52 @@ class UpstreamCompatRetryTests(unittest.TestCase):
             self.fake_client.captured_requests[1]["stream_options"],
             {"include_usage": False, "extra": "keep-me"},
         )
+
+    def test_retryable_status_reuses_latest_compat_rewritten_body(self) -> None:
+        retrying_client = UpstreamClient(Settings(
+            upstream_base_url="https://newapi.example.com/v1",
+            upstream_api_key="test-key",
+            upstream_timeout_seconds=30,
+            upstream_max_retries=1,
+        ))
+        self.fake_client.response_queue = [
+            FakeResponse(400, text="Unsupported parameter(s): parallel_tool_calls"),
+            FakeResponse(503, text="Service unavailable"),
+            FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
+        ]
+        payload = ChatCompletionsRequest.model_validate({
+            "model": "glm-5.2",
+            "messages": [{"role": "user", "content": "hello"}],
+            "reasoning_effort": "high",
+            "parallel_tool_calls": True,
+        })
+
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
+            result = asyncio.run(retrying_client.create_chat_completion(payload))
+
+        self.assertEqual(result["id"], "ok")
+        self.assertTrue(self.fake_client.captured_requests[0]["parallel_tool_calls"])
+        self.assertNotIn("parallel_tool_calls", self.fake_client.captured_requests[1])
+        self.assertNotIn("parallel_tool_calls", self.fake_client.captured_requests[2])
+        self.assertEqual(self.fake_client.captured_requests[1]["reasoning_effort"], "high")
+        self.assertEqual(self.fake_client.captured_requests[2]["reasoning_effort"], "high")
+
+    def test_retryable_network_exception_retries_non_streaming_request(self) -> None:
+        retrying_client = UpstreamClient(Settings(
+            upstream_base_url="https://newapi.example.com/v1",
+            upstream_api_key="test-key",
+            upstream_timeout_seconds=30,
+            upstream_max_retries=1,
+        ))
+        self.fake_client.response_queue = [
+            httpx.TimeoutException("boom"),
+            FakeResponse(200, json_body={"id": "ok", "object": "chat.completion"}),
+        ]
+
+        with patch("codex_chat_bridge.upstream.httpx.AsyncClient", return_value=self.fake_client):
+            result = asyncio.run(retrying_client.create_chat_completion(self._payload("gpt-5", "high")))
+
+        self.assertEqual(result["id"], "ok")
+        self.assertEqual(len(self.fake_client.captured_requests), 2)
+        self.assertEqual(self.fake_client.captured_requests[0]["reasoning_effort"], "high")
+        self.assertEqual(self.fake_client.captured_requests[1]["reasoning_effort"], "high")
