@@ -80,34 +80,6 @@ class MessageState:
             "content": list(self.parts),
         }
 
-    def _content_part_added_event(
-        self,
-        envelope: ResponseEnvelopeState,
-        *,
-        content_index: int,
-        part: dict,
-    ) -> bytes:
-        return content_part_added(
-            envelope.message_item_id,
-            self.output_index,
-            content_index,
-            part,
-        )
-
-    def _content_part_done_event(
-        self,
-        envelope: ResponseEnvelopeState,
-        *,
-        content_index: int,
-        part: dict,
-    ) -> bytes:
-        return content_part_done(
-            envelope.message_item_id,
-            self.output_index,
-            content_index,
-            part,
-        )
-
     def _ensure_message_item_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if self.item_added:
             return []
@@ -130,10 +102,11 @@ class MessageState:
         self.segments.append(segment)
         self.parts.append(part)
         events.append(
-            self._content_part_added_event(
-                envelope,
-                content_index=content_index,
-                part={"type": "output_text", "text": "", "annotations": annotations},
+            content_part_added(
+                envelope.message_item_id,
+                self.output_index,
+                content_index,
+                {"type": "output_text", "text": "", "annotations": annotations},
             )
         )
         return segment, events
@@ -175,8 +148,8 @@ class MessageState:
         }
         self.segments.append(segment)
         self.parts.append(part)
-        events.append(self._content_part_added_event(envelope, content_index=content_index, part=part))
-        events.append(self._content_part_done_event(envelope, content_index=content_index, part=part))
+        events.append(content_part_added(envelope.message_item_id, self.output_index, content_index, part))
+        events.append(content_part_done(envelope.message_item_id, self.output_index, content_index, part))
         return events
 
     def content_parts(self) -> list[dict]:
@@ -217,7 +190,7 @@ class MessageState:
                 content_index,
                 segment["text"],
             ),
-            self._content_part_done_event(envelope, content_index=content_index, part=text_part),
+            content_part_done(envelope.message_item_id, self.output_index, content_index, text_part),
         ]
 
     def finalize(self, envelope: ResponseEnvelopeState) -> list[bytes]:

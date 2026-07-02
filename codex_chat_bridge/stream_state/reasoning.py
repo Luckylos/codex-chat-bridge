@@ -35,9 +35,6 @@ class ReasoningState:
             "summary": [{"type": "summary_text", "text": self.text}],
         }
 
-    def _summary_part(self) -> dict:
-        return {"type": "summary_text", "text": self.text}
-
     def _ensure_started(self, envelope: ResponseEnvelopeState) -> list[bytes]:
         if self.item_added:
             return []
@@ -73,7 +70,7 @@ class ReasoningState:
             return []
         self.done = True
         item = self._reasoning_item_completed(envelope)
-        summary_part = self._summary_part()
+        summary_part = {"type": "summary_text", "text": self.text}
         envelope.append_completed_item(self.output_index, item)
         return [
             reasoning_summary_text_done(

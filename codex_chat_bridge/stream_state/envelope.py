@@ -71,17 +71,14 @@ class ResponseEnvelopeState:
         self._apply_request_echo(response)
         return response
 
-    def _response_event(self, event_name: str, response: dict) -> bytes:
-        return response_event(event_name, response)
-
     def ensure_started(self) -> list[bytes]:
         if self.response_started:
             return []
         self.response_started = True
         response = self.base_response("in_progress", [])
         return [
-            self._response_event("response.created", response),
-            self._response_event("response.in_progress", response),
+            response_event("response.created", response),
+            response_event("response.in_progress", response),
         ]
 
     def append_completed_item(self, output_index: int, item: dict) -> None:
@@ -103,14 +100,14 @@ class ResponseEnvelopeState:
         incomplete_details = incomplete_reason_from_finish_reason(self.finish_reason)
         if incomplete_details is not None:
             response["incomplete_details"] = incomplete_details
-        return self._response_event("response.completed", response)
+        return response_event("response.completed", response)
 
     def truncated_event(self, output: list[dict]) -> bytes:
         response = self.base_response("incomplete", output)
         response["incomplete_details"] = {"reason": "stream_truncated"}
-        return self._response_event("response.completed", response)
+        return response_event("response.completed", response)
 
     def failed_event(self, message: str, error_type: str) -> bytes:
         response = self.base_response("failed", self.completed_output_items())
         response["error"] = {"message": message, "type": error_type}
-        return self._response_event("response.failed", response)
+        return response_event("response.failed", response)
