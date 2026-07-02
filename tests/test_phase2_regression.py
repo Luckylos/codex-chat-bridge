@@ -366,6 +366,128 @@ def test_stream_chunk_preserves_message_before_tool_call_in_mixed_output() -> No
     assert completed_output[2]["reasoning_content"] == "Need tool."
 
 
+def test_buffered_chat_response_restores_flat_namespace_function_call_in_mixed_output() -> None:
+    tool_context = BridgeToolContext()
+    tool_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "flat",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+    chat_body = {
+        "id": "chatcmpl_buffered_flat_namespace_mixed",
+        "model": "demo-model",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "hello",
+                    "reasoning_content": "Need shell.",
+                    "tool_calls": [
+                        {
+                            "id": "call_flat_1",
+                            "type": "function",
+                            "function": {"name": "codex__shell", "arguments": '{"command":"pwd"}'},
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    async def collect() -> str:
+        parts: list[str] = []
+        async for chunk in create_responses_sse_from_chat_response(chat_body, tool_context=tool_context):
+            parts.append(chunk.decode())
+        return "".join(parts)
+
+    output = asyncio.run(collect())
+    completed_output = _completed_response_output(output)
+
+    assert [item["type"] for item in completed_output] == ["reasoning", "message", "function_call"]
+    assert completed_output[2]["name"] == "shell"
+    assert completed_output[2]["namespace"] == "codex"
+    assert completed_output[2]["reasoning_content"] == "Need shell."
+
+
+def test_stream_chunk_restores_nested_namespace_function_call_in_mixed_output() -> None:
+    tool_context = BridgeToolContext()
+    tool_context.add_namespace_tool(
+        {
+            "type": "namespace",
+            "name": "codex",
+            "strategy": "nested_oneof",
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "shell",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"command": {"type": "string"}},
+                            "required": ["command"],
+                        },
+                    },
+                }
+            ],
+        }
+    )
+
+    async def upstream_stream():
+        payload = {
+            "id": "chatcmpl_stream_nested_namespace_mixed",
+            "model": "demo-model",
+            "choices": [
+                {
+                    "delta": {
+                        "reasoning_content": "Need shell.",
+                        "content": "hello",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call_nested_1",
+                                "type": "function",
+                                "function": {"name": "codex__codex", "arguments": '{"action":"shell","command":"pwd"}'},
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        }
+        yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+        yield b"data: [DONE]\n\n"
+
+    async def collect() -> str:
+        parts: list[str] = []
+        async for chunk in create_responses_sse_stream_from_chat_stream(upstream_stream(), tool_context):
+            parts.append(chunk.decode())
+        return "".join(parts)
+
+    output = asyncio.run(collect())
+    completed_output = _completed_response_output(output)
+
+    assert [item["type"] for item in completed_output] == ["reasoning", "message", "function_call"]
+    assert completed_output[2]["name"] == "shell"
+    assert completed_output[2]["namespace"] == "codex"
+    assert completed_output[2]["reasoning_content"] == "Need shell."
+
+
 def test_stream_assistant_message_is_chat_compatible_for_session_replay() -> None:
     state = ResponsesStreamState(response_id="resp_stream_regression")
 

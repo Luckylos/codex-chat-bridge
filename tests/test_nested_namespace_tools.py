@@ -368,6 +368,7 @@ class NestedNamespaceStreamingTests(unittest.TestCase):
         )
 
         self.assertEqual(added_item["name"], "shell")
+        self.assertEqual(added_item["namespace"], "codex")
         self.assertEqual(argument_delta["delta"], '{"command":"pwd"}')
 
     def test_stream_finalize_falls_back_to_namespace_name_when_action_never_resolves(self) -> None:
@@ -389,7 +390,8 @@ class NestedNamespaceStreamingTests(unittest.TestCase):
             payload for event_name, payload in finalize_events if event_name == "response.function_call_arguments.done"
         )
 
-        self.assertEqual(done_item["name"], "codex__codex")
+        self.assertEqual(done_item["name"], "codex")
+        self.assertEqual(done_item["namespace"], "codex")
         self.assertEqual(arguments_done["arguments"], '{"command":"pwd"}')
 
 

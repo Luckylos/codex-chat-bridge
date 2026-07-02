@@ -54,7 +54,7 @@ class ToolStateStore:
         kind = resolve_tool_kind(self.tool_context, state.name)
         ensure_tool_identity(state, index, kind)
         state.output_index = envelope.allocate_output_index()
-        item = build_in_progress_item(state, kind)
+        item = build_in_progress_item(state, kind, self.tool_context)
         return [output_item_added(state.output_index, item)], kind
 
     def _apply_tool_call_delta(self, state: ToolCallState, tool_call: dict, reasoning: str | None) -> str | None:
@@ -97,6 +97,7 @@ class ToolStateStore:
             state.name,
             resolution.action_name,
         )
+        state.namespace = spec.namespace
         state.name = resolution.action_name
         state.arguments = resolution.normalized_arguments
         state.nested_buffered = False
@@ -163,7 +164,7 @@ class ToolStateStore:
 
         state.done = True
         kind = resolve_tool_kind(self.tool_context, state.name)
-        emission = build_completed_item(state, kind)
+        emission = build_completed_item(state, kind, self.tool_context)
         if kind.is_custom:
             input_text = emission.input_text or ""
             if input_text:

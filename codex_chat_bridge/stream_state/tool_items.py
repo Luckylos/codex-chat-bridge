@@ -12,6 +12,7 @@ class ToolCallState:
     item_id: str = ""
     call_id: str = ""
     name: str = ""
+    namespace: str | None = None
     arguments: str = ""
     added: bool = False
     done: bool = False
@@ -65,13 +66,32 @@ def _with_reasoning_content(state: ToolCallState, item: dict) -> dict:
     return item
 
 
-def build_in_progress_item(state: ToolCallState, kind: ToolKind) -> dict:
+def _response_name_and_namespace(
+    state: ToolCallState,
+    kind: ToolKind,
+    tool_context: BridgeToolContext,
+) -> tuple[str | None, str | None]:
+    if kind.is_tool_search:
+        return None, None
+    if kind.is_custom:
+        return state.name, None
+    if state.namespace:
+        return state.name, state.namespace
+    namespace, restored_name = tool_context.restore_namespace_and_name(state.name)
+    if namespace is not None:
+        return restored_name, namespace
+    return state.name, None
+
+
+def build_in_progress_item(state: ToolCallState, kind: ToolKind, tool_context: BridgeToolContext) -> dict:
+    response_name, namespace = _response_name_and_namespace(state, kind, tool_context)
     item = {
         "id": state.item_id,
         "type": kind.response_item_type,
         "status": "in_progress",
         "call_id": state.call_id,
-        "name": None if kind.is_tool_search else state.name,
+        "name": response_name,
+        "namespace": namespace,
         "execution": "client" if kind.is_tool_search else None,
         "input": "" if kind.is_custom else None,
         "arguments": {} if kind.is_tool_search else ("" if not kind.is_custom else None),
@@ -80,8 +100,13 @@ def build_in_progress_item(state: ToolCallState, kind: ToolKind) -> dict:
     return _with_reasoning_content(state, item)
 
 
-def build_completed_item(state: ToolCallState, kind: ToolKind) -> CompletedToolEmission:
+def build_completed_item(
+    state: ToolCallState,
+    kind: ToolKind,
+    tool_context: BridgeToolContext,
+) -> CompletedToolEmission:
     arguments = canonicalize_tool_arguments(state.arguments)
+    response_name, namespace = _response_name_and_namespace(state, kind, tool_context)
     if kind.is_custom:
         input_text = custom_tool_input_from_chat_arguments(arguments)
         item = _with_reasoning_content(
@@ -91,7 +116,7 @@ def build_completed_item(state: ToolCallState, kind: ToolKind) -> CompletedToolE
                 "type": "custom_tool_call",
                 "status": "completed",
                 "call_id": state.call_id,
-                "name": state.name,
+                "name": response_name,
                 "input": input_text,
             },
         )
@@ -116,8 +141,10 @@ def build_completed_item(state: ToolCallState, kind: ToolKind) -> CompletedToolE
             "type": "function_call",
             "status": "completed",
             "call_id": state.call_id,
-            "name": state.name,
+            "name": response_name,
+            "namespace": namespace,
             "arguments": arguments,
         },
     )
+    item = {key: value for key, value in item.items() if value is not None}
     return CompletedToolEmission(item=item, arguments=arguments, input_text=None)

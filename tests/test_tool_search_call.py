@@ -193,6 +193,87 @@ class ToolSearchCallTests(unittest.TestCase):
         self.assertEqual(item["namespace"], "mcp__codex_apps__gmail")
         self.assertEqual(item["arguments"], '{"max_results":5,"query":"-in:spam -in:trash"}')
 
+    def test_stream_restores_namespace_function_after_tool_search_output_in_mixed_output(self) -> None:
+        payload = ResponsesRequest.model_validate(
+            {
+                "model": "demo-model",
+                "tools": [{"type": "tool_search"}],
+                "input": [
+                    {
+                        "type": "tool_search_output",
+                        "call_id": "call_tool_search_1",
+                        "status": "completed",
+                        "execution": "client",
+                        "tools": [
+                            {
+                                "type": "namespace",
+                                "name": "mcp__codex_apps__gmail",
+                                "tools": [
+                                    {
+                                        "type": "function",
+                                        "name": "_search_emails",
+                                        "parameters": {
+                                            "type": "object",
+                                            "properties": {
+                                                "query": {"type": "string"},
+                                                "max_results": {"type": "integer"},
+                                            },
+                                            "required": ["query"],
+                                        },
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        tool_context = build_tool_context_from_request(payload)
+
+        async def upstream_stream():
+            payload = {
+                "id": "chatcmpl_namespace_stream",
+                "model": "demo-model",
+                "choices": [
+                    {
+                        "delta": {
+                            "reasoning_content": "Need inbox search.",
+                            "content": "hello",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_ns_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "mcp__codex_apps__gmail___search_emails",
+                                        "arguments": '{"query":"-in:spam -in:trash","max_results":5}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+            yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode()
+            yield b"data: [DONE]\n\n"
+
+        async def collect() -> str:
+            parts: list[str] = []
+            async for chunk in create_responses_sse_stream_from_chat_stream(upstream_stream(), tool_context):
+                parts.append(chunk.decode())
+            return "".join(parts)
+
+        events = _parse_sse_events(asyncio.run(collect()))
+        completed = next(payload["response"]["output"] for event_name, payload in events if event_name == "response.completed")
+        item = completed[2]
+
+        self.assertEqual([entry["type"] for entry in completed], ["reasoning", "message", "function_call"])
+        self.assertEqual(item["name"], "_search_emails")
+        self.assertEqual(item["namespace"], "mcp__codex_apps__gmail")
+        self.assertEqual(item["arguments"], '{"max_results":5,"query":"-in:spam -in:trash"}')
+        self.assertEqual(item["reasoning_content"], "Need inbox search.")
+
     def test_long_namespace_tool_names_use_hashed_suffix_mapping(self) -> None:
         namespace = "mcp__codex_apps__" + ("verylongnamespace_" * 3)
         tool_name = "_" + ("very_long_tool_name_" * 3)
